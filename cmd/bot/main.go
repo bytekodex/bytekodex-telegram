@@ -17,6 +17,7 @@ import (
 	"github.com/bytekodex/bytekodex-telegram/internal/compile"
 	"github.com/bytekodex/bytekodex-telegram/internal/render"
 	"github.com/bytekodex/bytekodex-telegram/internal/session"
+	"github.com/bytekodex/bytekodex-telegram/internal/toolchain"
 	tgbot "github.com/go-telegram/bot"
 )
 
@@ -33,6 +34,7 @@ type config struct {
 	fontSize       float32
 	depsVolume     string
 	containerCmd   string
+	lockPath       string
 	sessionTTL     time.Duration
 	maxSourceBytes int
 	workers        int
@@ -44,6 +46,7 @@ func load() (config, error) {
 		fontPath:     env("BYTEKODEX_FONT", "/usr/share/fonts/truetype/jetbrains/JetBrainsMono-Regular.ttf"),
 		depsVolume:   os.Getenv("BYTEKODEX_DEPS"),
 		containerCmd: env("BYTEKODEX_CONTAINER_RUNTIME", "docker"),
+		lockPath:     env("BYTEKODEX_TOOLCHAIN_LOCK", "toolchains/lock.json"),
 		// One renderer per core: each owns a glyph cache, and the cache is the reason they cannot
 		// simply be shared.
 		workers: runtime.GOMAXPROCS(0),
@@ -91,6 +94,17 @@ func run() error {
 	}
 	defer renderer.Close()
 
+	// The catalog is data, not code: which compilers exist comes from the resolved lock, so a new
+	// Kotlin release reaches users without a rebuild.
+	lock, err := toolchain.LoadLock(config.lockPath)
+	if err != nil {
+		return err
+	}
+	catalog := toolchain.FromLock(lock)
+	if len(catalog.Languages()) == 0 {
+		return fmt.Errorf("%s resolves no toolchains at all", config.lockPath)
+	}
+
 	sessions := session.NewStore(config.sessionTTL)
 	done := make(chan struct{})
 	defer close(done)
@@ -104,6 +118,7 @@ func run() error {
 			DepsVolume: config.depsVolume,
 		},
 		Renderer:       renderer,
+		Catalog:        catalog,
 		Log:            log,
 		MaxSourceBytes: config.maxSourceBytes,
 	}

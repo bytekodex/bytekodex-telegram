@@ -1,7 +1,11 @@
 // Package toolchain describes what the bot can compile with, and how.
 //
-// Every entry names a container image rather than a local binary. Compiling a stranger's source
-// is running their code — Groovy global AST transformations and javac annotation processors both
+// Nothing here is hardcoded. The offered versions come from toolchains/manifest.json, their exact
+// downloads from toolchains/lock.json, and this file only turns the lock into something a keyboard
+// and a compiler invocation can use. Adding Kotlin 2.5 is an edit to the manifest, not to Go.
+//
+// Every entry names a container image rather than a local binary. Compiling a stranger's source is
+// running their code — Groovy global AST transformations and javac annotation processors both
 // execute at compile time — so there is no version of this that is safe on the host.
 package toolchain
 
@@ -25,6 +29,15 @@ type Release struct {
 	Targets []string
 	// Default marks the release preselected in the keyboard.
 	Default bool
+	// Preview enables the compiler's preview features. For javac this is only legal when the
+	// target equals the compiler's own version, which is why it lives per release.
+	Preview bool
+	// EarlyAccess marks a build that is not a final release, so the caption can say so.
+	EarlyAccess bool
+
+	// usesReleaseFlag distinguishes javac 9 and up, which takes --release, from 7 and 8, which
+	// need -source and -target.
+	usesReleaseFlag bool
 }
 
 // Toolchain is a language together with its selectable versions.
@@ -38,55 +51,146 @@ type Toolchain struct {
 	Command func(release Release, target string, sources []string) []string
 }
 
-// All is the catalog. Versions are pinned rather than floating, so a rebuilt image cannot quietly
-// change what a user sees.
-var All = []Toolchain{
-	{
+// Catalog is everything the bot can compile. It is built from a lock and passed around
+// explicitly, so there is no global to get out of step with the file on disk.
+type Catalog struct {
+	chains []Toolchain
+}
+
+// FromLock turns a resolved lock into a catalog.
+func FromLock(lock *Lock) *Catalog {
+	return &Catalog{chains: []Toolchain{
+		javaToolchain(lock),
+		kotlinToolchain(lock),
+		groovyToolchain(lock),
+	}}
+}
+
+// For returns the toolchain for a language.
+func (c *Catalog) For(language detect.Language) (Toolchain, bool) {
+	if c == nil {
+		return Toolchain{}, false
+	}
+	i := slices.IndexFunc(c.chains, func(t Toolchain) bool { return t.Language == language })
+	if i < 0 || len(c.chains[i].Releases) == 0 {
+		return Toolchain{}, false
+	}
+	return c.chains[i], true
+}
+
+// Languages lists what the bot supports, in the order the keyboard shows them. A language whose
+// lock section is empty is left out rather than shown as a dead end.
+func (c *Catalog) Languages() []detect.Language {
+	if c == nil {
+		return nil
+	}
+	out := make([]detect.Language, 0, len(c.chains))
+	for _, chain := range c.chains {
+		if len(chain.Releases) > 0 {
+			out = append(out, chain.Language)
+		}
+	}
+	return out
+}
+
+/* ---------- per-language assembly ---------- */
+
+func javaToolchain(lock *Lock) Toolchain {
+	releases := make([]Release, 0, len(lock.JDK))
+	for i, jdk := range lock.SortedJDK() {
+		label := fmt.Sprintf("JDK %d", jdk.Major)
+		if jdk.ReleaseStatus == "ea" {
+			label += " (early access)"
+		}
+		releases = append(releases, Release{
+			ID:              fmt.Sprintf("java%d", jdk.Major),
+			Label:           label,
+			Image:           jdk.Image(),
+			Targets:         targets(jdk.ReleaseFloor, fmt.Sprint(jdk.Major)),
+			Default:         i == 0,
+			Preview:         jdk.Preview,
+			EarlyAccess:     jdk.ReleaseStatus == "ea",
+			usesReleaseFlag: jdk.ReleaseFlag,
+		})
+	}
+
+	return Toolchain{
 		Language: detect.Java,
-		Releases: []Release{
-			{ID: "java25", Label: "JDK 25 (LTS)", Image: "eclipse-temurin:25-jdk", Targets: []string{"25", "21", "17"}, Default: true},
-			{ID: "java21", Label: "JDK 21 (LTS)", Image: "eclipse-temurin:21-jdk", Targets: []string{"21", "17", "11"}},
-			{ID: "java17", Label: "JDK 17 (LTS)", Image: "eclipse-temurin:17-jdk", Targets: []string{"17", "11", "8"}},
-			{ID: "java11", Label: "JDK 11 (LTS)", Image: "eclipse-temurin:11-jdk", Targets: []string{"11", "8"}},
-			{ID: "java8", Label: "JDK 8", Image: "eclipse-temurin:8-jdk", Targets: []string{"8"}},
-		},
-		Command: func(_ Release, target string, sources []string) []string {
+		Releases: releases,
+		Command: func(release Release, target string, sources []string) []string {
 			// -proc:none matters: an annotation processor on the classpath would otherwise run
 			// arbitrary code during compilation. -g keeps the local variable table, which is half
 			// of what makes the output worth looking at.
-			return append([]string{
-				"javac", "-g", "-proc:none", "-nowarn",
-				"--release", target,
-				"-d", "out",
-			}, sources...)
+			command := []string{"javac", "-g", "-proc:none", "-nowarn"}
+
+			// javac only accepts --enable-preview when the target is its own version, so preview
+			// and an older target are mutually exclusive rather than merely unusual.
+			preview := release.Preview && strings.TrimPrefix(release.ID, "java") == target
+			switch {
+			case preview:
+				command = append(command, "--release", target, "--enable-preview")
+			case release.usesReleaseFlag:
+				command = append(command, "--release", target)
+			default:
+				// javac 7 and 8 predate --release. -source and -target alone do not pin the API,
+				// but on those JDKs the API is the right one anyway.
+				command = append(command, "-source", target, "-target", target)
+			}
+
+			return append(command, append([]string{"-d", "out"}, sources...)...)
 		},
-	},
-	{
+	}
+}
+
+func kotlinToolchain(lock *Lock) Toolchain {
+	releases := make([]Release, 0, len(lock.Kotlin))
+	for _, kotlin := range lock.Kotlin {
+		releases = append(releases, Release{
+			ID:      "kotlin" + kotlin.Version,
+			Label:   "Kotlin " + kotlin.Version,
+			Image:   kotlin.Image("kotlin"),
+			Targets: targets(8, kotlin.JVMTargetMax),
+			Default: kotlin.Default,
+		})
+	}
+	slices.Reverse(releases)
+
+	return Toolchain{
 		Language: detect.Kotlin,
 		Classpath: []string{
 			"kotlinx-coroutines-core-jvm.jar",
 			"kotlin-stdlib.jar",
 		},
-		Releases: []Release{
-			{ID: "kotlin2.2", Label: "Kotlin 2.2", Image: "ghcr.io/bytekodex/kotlin:2.2", Targets: []string{"25", "21", "17"}, Default: true},
-			{ID: "kotlin2.1", Label: "Kotlin 2.1", Image: "ghcr.io/bytekodex/kotlin:2.1", Targets: []string{"21", "17", "11"}},
-			{ID: "kotlin2.0", Label: "Kotlin 2.0", Image: "ghcr.io/bytekodex/kotlin:2.0", Targets: []string{"21", "17", "8"}},
-			{ID: "kotlin1.9", Label: "Kotlin 1.9", Image: "ghcr.io/bytekodex/kotlin:1.9", Targets: []string{"17", "11", "8"}},
-		},
+		Releases: releases,
 		Command: func(_ Release, target string, sources []string) []string {
+			// -Xno-optimize keeps the bytecode close to what the source says, which is the point
+			// of looking at it. Progressive mode is deliberately off: it changes semantics, and a
+			// user who wants it can ask for it through the extra flags.
 			return append([]string{
 				"kotlinc", "-nowarn", "-Xno-optimize",
 				"-jvm-target", target,
 				"-d", "out",
 			}, sources...)
 		},
-	},
-	{
+	}
+}
+
+func groovyToolchain(lock *Lock) Toolchain {
+	releases := make([]Release, 0, len(lock.Groovy))
+	for _, groovy := range lock.Groovy {
+		releases = append(releases, Release{
+			ID:      "groovy" + groovy.Version,
+			Label:   "Groovy " + groovy.Version,
+			Image:   groovy.Image("groovy"),
+			Targets: targets(8, groovy.JVMTargetMax),
+			Default: groovy.Default,
+		})
+	}
+	slices.Reverse(releases)
+
+	return Toolchain{
 		Language: detect.Groovy,
-		Releases: []Release{
-			{ID: "groovy4", Label: "Groovy 4.0", Image: "groovy:4.0-jdk21", Targets: []string{"21", "17", "11"}, Default: true},
-			{ID: "groovy3", Label: "Groovy 3.0", Image: "groovy:3.0-jdk17", Targets: []string{"17", "11", "8"}},
-		},
+		Releases: releases,
 		Command: func(_ Release, target string, sources []string) []string {
 			return append([]string{
 				"groovyc", "--compile-static=false",
@@ -94,36 +198,10 @@ var All = []Toolchain{
 				"-d", "out",
 			}, sources...)
 		},
-	},
-	{
-		Language: detect.Scala,
-		Releases: []Release{
-			{ID: "scala3", Label: "Scala 3.5", Image: "ghcr.io/bytekodex/scala:3.5", Targets: []string{"21", "17"}, Default: true},
-			{ID: "scala2.13", Label: "Scala 2.13", Image: "ghcr.io/bytekodex/scala:2.13", Targets: []string{"17", "11", "8"}},
-		},
-		Command: func(_ Release, target string, sources []string) []string {
-			return append([]string{"scalac", "-release", target, "-d", "out"}, sources...)
-		},
-	},
+	}
 }
 
-// For returns the toolchain for a language.
-func For(language detect.Language) (Toolchain, bool) {
-	i := slices.IndexFunc(All, func(t Toolchain) bool { return t.Language == language })
-	if i < 0 {
-		return Toolchain{}, false
-	}
-	return All[i], true
-}
-
-// Languages lists what the bot supports, in the order the keyboard shows them.
-func Languages() []detect.Language {
-	out := make([]detect.Language, 0, len(All))
-	for _, t := range All {
-		out = append(out, t.Language)
-	}
-	return out
-}
+/* ---------- lookups ---------- */
 
 // Release finds a release by its stable ID.
 func (t Toolchain) Release(id string) (Release, bool) {

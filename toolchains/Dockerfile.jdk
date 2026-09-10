@@ -1,0 +1,46 @@
+# One JDK, from a URL the resolver pinned.
+#
+# There is deliberately no version anywhere in this file. `toolchainctl plan` supplies the URL and
+# the checksum out of lock.json, which is how JDK 7 and JDK 28 come out of the same three lines.
+#
+#   docker build -f Dockerfile.jdk -t ghcr.io/bytekodex/jdk:25 \
+#     --build-arg URL=... --build-arg SHA256=... .
+
+ARG BASE=debian:trixie-slim
+
+FROM ${BASE} AS download
+ARG URL
+ARG SHA256
+
+RUN set -eux; \
+    test -n "${URL}"; test -n "${SHA256}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
+    curl -fsSL --retry 3 -o /tmp/jdk.tar.gz "${URL}"; \
+    echo "${SHA256}  /tmp/jdk.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/jdk; \
+    tar -xzf /tmp/jdk.tar.gz -C /opt/jdk --strip-components=1; \
+    rm /tmp/jdk.tar.gz; \
+    /opt/jdk/bin/javac -version
+
+FROM ${BASE}
+
+# The compiler runs as a user with no home to write to and no way to become root. The scratch
+# directory the caller mounts is the only writable surface.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends libfreetype6 zlib1g; \
+    rm -rf /var/lib/apt/lists/*; \
+    useradd --uid 1000 --no-create-home --shell /usr/sbin/nologin compiler
+
+COPY --from=download /opt/jdk /opt/jdk
+
+ENV JAVA_HOME=/opt/jdk
+ENV PATH=/opt/jdk/bin:$PATH
+
+USER 1000:1000
+WORKDIR /work
+
+# No entrypoint on purpose: the caller passes the whole compiler invocation, and a wrapper script
+# would be one more thing that could interpret an argument.
+CMD ["javac", "-version"]

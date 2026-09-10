@@ -11,6 +11,24 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
+// testCatalog is a small stand-in for the resolved lock, so these tests do not depend on which
+// versions happen to be pinned today.
+func testCatalog() *toolchain.Catalog {
+	return toolchain.FromLock(&toolchain.Lock{
+		JDK: []toolchain.LockedJDK{
+			{Major: 8, ReleaseFloor: 8, ReleaseStatus: "ga"},
+			{Major: 25, ReleaseFloor: 8, ReleaseFlag: true, ReleaseStatus: "ga"},
+		},
+		Kotlin: []toolchain.LockedTool{
+			{Version: "1.9.25", JVMTargetMax: "21", JDK: 21},
+			{Version: "2.4.20", JVMTargetMax: "25", JDK: 25, Default: true},
+		},
+		Groovy: []toolchain.LockedTool{
+			{Version: "5.1.2", JVMTargetMax: "25", JDK: 25, Default: true},
+		},
+	})
+}
+
 func TestEncodeDecodeRoundTrips(t *testing.T) {
 	cases := []Callback{
 		{Action: ActionCompile},
@@ -41,13 +59,14 @@ func TestDecodeRejectsForeignCallbacks(t *testing.T) {
 // past it, so walking the whole catalog here is what keeps that panic out of production.
 func TestEveryCallbackFitsTheLimit(t *testing.T) {
 	store := session.NewStore(0)
-	for _, language := range toolchain.Languages() {
+	catalog := testCatalog()
+	for _, language := range catalog.Languages() {
 		s := store.Start(1, nil, detect.Guess{Language: language})
-		chain, _ := toolchain.For(language)
+		chain, _ := catalog.For(language)
 		for _, release := range chain.Releases {
 			store.Update(1, func(s *session.Session) { s.ReleaseID = release.ID })
 			for _, panel := range []Panel{PanelMain, PanelLanguage, PanelRelease, PanelTarget, PanelView} {
-				for _, row := range Keyboard(s, panel).InlineKeyboard {
+				for _, row := range Keyboard(catalog, s, panel).InlineKeyboard {
 					for _, button := range row {
 						if len(button.CallbackData) > maxCallbackData {
 							t.Errorf("%q carries %d bytes of callback data", button.Text, len(button.CallbackData))
@@ -63,12 +82,12 @@ func TestMainPanelOffersCompileOnlyForAKnownLanguage(t *testing.T) {
 	store := session.NewStore(0)
 
 	unknown := store.Start(1, nil, detect.Guess{Language: detect.Unknown})
-	if hasButton(t, Keyboard(unknown, PanelMain), "Compile") {
+	if hasButton(t, Keyboard(testCatalog(), unknown, PanelMain), "Compile") {
 		t.Error("offered to compile a snippet with no language")
 	}
 
 	known := store.Start(2, nil, detect.Guess{Language: detect.Kotlin, Confident: true})
-	if !hasButton(t, Keyboard(known, PanelMain), "Compile") {
+	if !hasButton(t, Keyboard(testCatalog(), known, PanelMain), "Compile") {
 		t.Error("no Compile button for Kotlin")
 	}
 }
@@ -77,17 +96,17 @@ func TestCaptionStatesTheGuessWithoutAsking(t *testing.T) {
 	store := session.NewStore(0)
 
 	confident := store.Start(1, nil, detect.Guess{Language: detect.Java, Confident: true})
-	if caption := Caption(confident); !strings.Contains(caption, "Looks like Java") {
+	if caption := Caption(testCatalog(), confident); !strings.Contains(caption, "Looks like Java") {
 		t.Errorf("caption = %q", caption)
 	}
 
 	unsure := store.Start(2, nil, detect.Guess{Language: detect.Groovy})
-	if caption := Caption(unsure); !strings.Contains(caption, "Might be Groovy") {
+	if caption := Caption(testCatalog(), unsure); !strings.Contains(caption, "Might be Groovy") {
 		t.Errorf("caption = %q", caption)
 	}
 
 	none := store.Start(3, nil, detect.Guess{})
-	if caption := Caption(none); strings.Contains(caption, "?") {
+	if caption := Caption(testCatalog(), none); strings.Contains(caption, "?") {
 		t.Errorf("caption asks a question: %q", caption)
 	}
 }

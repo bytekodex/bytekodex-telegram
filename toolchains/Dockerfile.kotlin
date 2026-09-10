@@ -1,0 +1,40 @@
+# One Kotlin compiler, on top of one of our JDK images.
+#
+# Kotlin ships as a plain zip of jars plus a launcher script, so every version from 1.2 to 2.4
+# installs identically and the only thing that changes is the URL.
+#
+#   docker build -f Dockerfile.kotlin -t ghcr.io/bytekodex/kotlin:2.4.20 \
+#     --build-arg BASE=ghcr.io/bytekodex/jdk:25 --build-arg URL=... --build-arg SHA256=... .
+
+ARG BASE
+
+FROM ${BASE} AS download
+ARG URL
+ARG SHA256
+
+# Back to root only to install, then dropped again in the final stage.
+USER root
+RUN set -eux; \
+    test -n "${URL}"; test -n "${SHA256}"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl unzip; \
+    curl -fsSL --retry 3 -o /tmp/kotlin.zip "${URL}"; \
+    echo "${SHA256}  /tmp/kotlin.zip" | sha256sum -c -; \
+    unzip -q /tmp/kotlin.zip -d /opt; \
+    rm /tmp/kotlin.zip; \
+    test -x /opt/kotlinc/bin/kotlinc
+
+FROM ${BASE}
+USER root
+COPY --from=download /opt/kotlinc /opt/kotlinc
+
+# The launcher is a shell script that resolves JAVA_HOME, which the base image already sets.
+ENV PATH=/opt/kotlinc/bin:$PATH
+
+# kotlinc writes its daemon state and temporary files under HOME. With no writable home it falls
+# back to the JVM temp directory, which the caller mounts as a tmpfs.
+ENV JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/tmp
+
+USER 1000:1000
+WORKDIR /work
+CMD ["kotlinc", "-version"]

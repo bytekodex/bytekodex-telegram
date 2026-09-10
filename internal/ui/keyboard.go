@@ -116,7 +116,7 @@ func ViewByID(id string) (render.View, bool) {
 
 // Caption is the text above the keyboard. It states what was detected rather than asking about
 // it, because a question the user has to answer before anything happens is the thing to avoid.
-func Caption(s *session.Session) string {
+func Caption(catalog *toolchain.Catalog, s *session.Session) string {
 	var b strings.Builder
 
 	switch {
@@ -130,7 +130,7 @@ func Caption(s *session.Session) string {
 		fmt.Fprintf(&b, "%s, as you asked.", s.Language.Display())
 	}
 
-	if chain, ok := toolchain.For(s.Language); ok {
+	if chain, ok := catalog.For(s.Language); ok {
 		release := chain.DefaultRelease()
 		if chosen, found := chain.Release(s.ReleaseID); found {
 			release = chosen
@@ -149,23 +149,23 @@ func Caption(s *session.Session) string {
 }
 
 // Keyboard builds the markup for a panel.
-func Keyboard(s *session.Session, panel Panel) *models.InlineKeyboardMarkup {
+func Keyboard(catalog *toolchain.Catalog, s *session.Session, panel Panel) *models.InlineKeyboardMarkup {
 	switch panel {
 	case PanelLanguage:
-		return languagePanel(s)
+		return languagePanel(catalog, s)
 	case PanelRelease:
-		return releasePanel(s)
+		return releasePanel(catalog, s)
 	case PanelTarget:
-		return targetPanel(s)
+		return targetPanel(catalog, s)
 	case PanelView:
 		return viewPanel(s)
 	default:
-		return mainPanel(s)
+		return mainPanel(catalog, s)
 	}
 }
 
-func mainPanel(s *session.Session) *models.InlineKeyboardMarkup {
-	chain, known := toolchain.For(s.Language)
+func mainPanel(catalog *toolchain.Catalog, s *session.Session) *models.InlineKeyboardMarkup {
+	chain, known := catalog.For(s.Language)
 	release := chain.DefaultRelease()
 	if chosen, ok := chain.Release(s.ReleaseID); ok {
 		release = chosen
@@ -196,9 +196,9 @@ func mainPanel(s *session.Session) *models.InlineKeyboardMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func languagePanel(s *session.Session) *models.InlineKeyboardMarkup {
+func languagePanel(catalog *toolchain.Catalog, s *session.Session) *models.InlineKeyboardMarkup {
 	var rows [][]models.InlineKeyboardButton
-	for _, language := range toolchain.Languages() {
+	for _, language := range catalog.Languages() {
 		label := language.Display()
 		if language == s.Language {
 			label = "· " + label
@@ -210,10 +210,10 @@ func languagePanel(s *session.Session) *models.InlineKeyboardMarkup {
 	return withBack(rows)
 }
 
-func releasePanel(s *session.Session) *models.InlineKeyboardMarkup {
-	chain, ok := toolchain.For(s.Language)
+func releasePanel(catalog *toolchain.Catalog, s *session.Session) *models.InlineKeyboardMarkup {
+	chain, ok := catalog.For(s.Language)
 	if !ok {
-		return mainPanel(s)
+		return mainPanel(catalog, s)
 	}
 	var rows [][]models.InlineKeyboardButton
 	for _, release := range chain.Releases {
@@ -228,10 +228,10 @@ func releasePanel(s *session.Session) *models.InlineKeyboardMarkup {
 	return withBack(rows)
 }
 
-func targetPanel(s *session.Session) *models.InlineKeyboardMarkup {
-	chain, ok := toolchain.For(s.Language)
+func targetPanel(catalog *toolchain.Catalog, s *session.Session) *models.InlineKeyboardMarkup {
+	chain, ok := catalog.For(s.Language)
 	if !ok {
-		return mainPanel(s)
+		return mainPanel(catalog, s)
 	}
 	release := chain.DefaultRelease()
 	if chosen, found := chain.Release(s.ReleaseID); found {

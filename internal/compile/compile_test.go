@@ -63,8 +63,20 @@ func TestArgsLockTheContainerDown(t *testing.T) {
 	}
 }
 
+// testCatalog mirrors the shape of a resolved lock without depending on the pinned versions.
+func testCatalog() *toolchain.Catalog {
+	return toolchain.FromLock(&toolchain.Lock{
+		JDK: []toolchain.LockedJDK{
+			{Major: 8, ReleaseFloor: 8, ReleaseStatus: "ga"},
+			{Major: 25, ReleaseFloor: 8, ReleaseFlag: true, ReleaseStatus: "ga"},
+		},
+		Kotlin: []toolchain.LockedTool{{Version: "2.4.20", JVMTargetMax: "25", JDK: 25, Default: true}},
+		Groovy: []toolchain.LockedTool{{Version: "5.1.2", JVMTargetMax: "25", JDK: 25, Default: true}},
+	})
+}
+
 func TestATargetTheCompilerCannotEmitIsRefusedBeforeRunning(t *testing.T) {
-	chain, ok := toolchain.For(detect.Java)
+	chain, ok := testCatalog().For(detect.Java)
 	if !ok {
 		t.Fatal("no java toolchain")
 	}
@@ -84,12 +96,12 @@ func TestATargetTheCompilerCannotEmitIsRefusedBeforeRunning(t *testing.T) {
 }
 
 func TestClasspathIsAddedForKotlinAndOmittedForJava(t *testing.T) {
-	kotlin, _ := toolchain.For(detect.Kotlin)
+	kotlin, _ := testCatalog().For(detect.Kotlin)
 	if got := kotlin.ClasspathArg("/deps"); !strings.Contains(got, "coroutines") {
 		t.Errorf("kotlin classpath = %q, want coroutines on it", got)
 	}
 
-	java, _ := toolchain.For(detect.Java)
+	java, _ := testCatalog().For(detect.Java)
 	if got := java.ClasspathArg("/deps"); got != "" {
 		t.Errorf("java classpath = %q, want empty rather than an empty -cp", got)
 	}

@@ -1,0 +1,56 @@
+{
+  "comment": [
+    "Which toolchains the bot offers. This file holds only what a human has to decide; every",
+    "download URL and checksum is resolved by `toolchainctl resolve` into lock.json.",
+    "Adding a version means adding one entry here and re-running the resolver.",
+    "",
+    "jvm_target_max and release_floor describe what a compiler can emit. They are stated here",
+    "rather than derived because only the compiler itself knows for sure, and `toolchainctl probe`",
+    "is what corrects them against real images once those are built."
+  ],
+  "jdk": {
+    "operating_system": "linux",
+    "architecture": "x64",
+    "libc": "glibc",
+    "archive_type": "tar.gz",
+    "distributions": ["temurin", "zulu", "corretto", "sap_machine", "oracle_open_jdk", "liberica"],
+    "versions": [
+      { "major": 7, "release_flag": false, "release_floor": 7 },
+      { "major": 8, "release_flag": false, "release_floor": 8 },
+      { "major": 11, "release_floor": 7 },
+      { "major": 17, "release_floor": 7 },
+      { "major": 21, "release_floor": 8 },
+      { "major": 25, "release_floor": 8 },
+      { "major": 26, "release_floor": 8 },
+      { "major": 27, "release_floor": 8, "allow_early_access": true },
+      { "major": 28, "release_floor": 8, "allow_early_access": true, "preview": true }
+    ]
+  },
+  "kotlin": {
+    "versions": [
+      { "version": "1.2.71", "jvm_target_max": "1.8", "jdk": 8 },
+      { "version": "1.3.72", "jvm_target_max": "1.8", "jdk": 8 },
+      { "version": "1.4.32", "jvm_target_max": "14", "jdk": 11 },
+      { "version": "1.5.32", "jvm_target_max": "16", "jdk": 17 },
+      { "version": "1.6.21", "jvm_target_max": "17", "jdk": 17 },
+      { "version": "1.7.22", "jvm_target_max": "18", "jdk": 17 },
+      { "version": "1.8.22", "jvm_target_max": "20", "jdk": 17 },
+      { "version": "1.9.25", "jvm_target_max": "21", "jdk": 21 },
+      { "version": "2.0.21", "jvm_target_max": "22", "jdk": 21 },
+      { "version": "2.1.21", "jvm_target_max": "23", "jdk": 21 },
+      { "version": "2.2.21", "jvm_target_max": "24", "jdk": 25 },
+      { "version": "2.3.21", "jvm_target_max": "25", "jdk": 25 },
+      { "version": "2.4.20", "jvm_target_max": "25", "jdk": 25, "default": true }
+    ]
+  },
+  "groovy": {
+    "versions": [
+      { "version": "2.4.21", "jvm_target_max": "8", "jdk": 8 },
+      { "version": "2.5.23", "jvm_target_max": "8", "jdk": 11 },
+      { "version": "3.0.25", "jvm_target_max": "17", "jdk": 17 },
+      { "version": "4.0.33", "jvm_target_max": "21", "jdk": 21 },
+      { "version": "5.0.8", "jvm_target_max": "25", "jdk": 25 },
+      { "version": "5.1.2", "jvm_target_max": "25", "jdk": 25, "default": true }
+    ]
+  }
+}

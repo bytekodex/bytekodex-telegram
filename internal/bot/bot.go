@@ -35,6 +35,7 @@ type Handler struct {
 	Sessions *session.Store
 	Compiler compile.Compiler
 	Renderer *render.Renderer
+	Catalog  *toolchain.Catalog
 	Log      *slog.Logger
 
 	// MaxSourceBytes bounds one snippet.
@@ -81,8 +82,8 @@ func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      s.ChatID,
-		Text:        ui.Caption(s),
-		ReplyMarkup: ui.Keyboard(s, ui.PanelMain),
+		Text:        ui.Caption(h.Catalog, s),
+		ReplyMarkup: ui.Keyboard(h.Catalog, s, ui.PanelMain),
 	})
 	if err != nil {
 		h.Log.Error("sending the keyboard", "error", err)
@@ -156,9 +157,9 @@ func (h *Handler) callback(ctx context.Context, b *bot.Bot, update *models.Updat
 }
 
 func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Session) {
-	chain, ok := toolchain.For(s.Language)
+	chain, ok := h.Catalog.For(s.Language)
 	if !ok {
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Pick a language first.", ui.Keyboard(s, ui.PanelLanguage))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Pick a language first.", ui.Keyboard(h.Catalog, s, ui.PanelLanguage))
 		return
 	}
 	release := chain.DefaultRelease()
@@ -174,7 +175,7 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 
 	result, err := h.Compiler.Compile(ctx, chain, release, target, s.Files)
 	if err != nil {
-		h.edit(ctx, b, s.ChatID, s.MessageID, compileMessage(err), ui.Keyboard(s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, compileMessage(err), ui.Keyboard(h.Catalog, s, ui.PanelMain))
 		return
 	}
 
@@ -217,13 +218,13 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 	}
 
 	if len(media) == 0 {
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Compiled, but nothing could be rendered.", ui.Keyboard(s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Compiled, but nothing could be rendered.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
 		return
 	}
 
 	if err := h.sendImages(ctx, b, s, media); err != nil {
 		h.Log.Error("sending images", "error", err)
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take the images.", ui.Keyboard(s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take the images.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
 		return
 	}
 
@@ -232,7 +233,7 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 	if skipped := len(result.Artifacts) - len(media); skipped > 0 {
 		summary += fmt.Sprintf(" · %d not shown", skipped)
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(s, ui.PanelMain))
+	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
 }
 
 // sendImages uses an album for several classes and a single document for one, because a media
@@ -255,7 +256,7 @@ func (h *Handler) repaint(ctx context.Context, b *bot.Bot, s *session.Session, p
 	if s == nil {
 		return
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, ui.Caption(s), ui.Keyboard(s, panel))
+	h.edit(ctx, b, s.ChatID, s.MessageID, ui.Caption(h.Catalog, s), ui.Keyboard(h.Catalog, s, panel))
 }
 
 func (h *Handler) edit(ctx context.Context, b *bot.Bot, chatID int64, messageID int, text string, markup models.ReplyMarkup) {
