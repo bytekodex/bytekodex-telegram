@@ -79,7 +79,7 @@ typedef struct bk_request {
   float    font_size;         /* honored by bk_renderer_new, not per call */
   uint32_t margin;            /* 0 for the default */
   uint32_t corner_radius;     /* 0 for square corners */
-  uint32_t max_dimension_sum; /* 0 for the default 9600; Telegram's photo cap is 10000 */
+  uint32_t max_dimension_sum; /* width + height ceiling; 0 for the default 16000 */
   bk_slice input;
 } bk_request;
 

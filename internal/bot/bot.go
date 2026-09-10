@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/bytekodex/bytekodex-telegram/internal/detect"
 	"github.com/bytekodex/bytekodex-telegram/internal/render"
 	"github.com/bytekodex/bytekodex-telegram/internal/session"
+	"github.com/bytekodex/bytekodex-telegram/internal/sysclass"
 	"github.com/bytekodex/bytekodex-telegram/internal/toolchain"
 	"github.com/bytekodex/bytekodex-telegram/internal/ui"
 	"github.com/go-telegram/bot"
@@ -36,7 +38,10 @@ type Handler struct {
 	Compiler compile.Compiler
 	Renderer *render.Renderer
 	Catalog  *toolchain.Catalog
-	Log      *slog.Logger
+	// SysClasses answers "show me java.util.concurrent.ConcurrentHashMap" out of an extracted JDK.
+	// Optional: without it those messages fall through and are treated as source.
+	SysClasses *sysclass.Store
+	Log        *slog.Logger
 
 	// MaxSourceBytes bounds one snippet.
 	MaxSourceBytes int
@@ -74,6 +79,13 @@ func (h *Handler) start(ctx context.Context, b *bot.Bot, update *models.Update) 
 
 func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 	message := update.Message
+	// A bare class name is a lookup, not a snippet. It is answered out of an extracted JDK, with
+	// no compiler and no container involved.
+	if query, ok := sysclass.LooksLikeQuery(message.Text); ok && h.SysClasses.Available() {
+		h.systemClass(ctx, b, message.Chat.ID, query)
+		return
+	}
+
 	code := normalizeSource(stripFence(message.Text))
 
 	if len(code) < minCodeLength {
@@ -165,7 +177,141 @@ func (h *Handler) callback(ctx context.Context, b *bot.Bot, update *models.Updat
 	}
 }
 
+// systemClass answers a class name out of the store and starts a session so the version and the
+// view can still be changed afterwards.
+func (h *Handler) systemClass(ctx context.Context, b *bot.Bot, chatID int64, query string) {
+	chain, ok := h.Catalog.For(detect.Java)
+	if !ok {
+		return
+	}
+
+	// The newest JDK that both the catalog offers and the store actually holds.
+	release, found := newestStocked(chain, h.SysClasses)
+	if !found {
+		return
+	}
+
+	class, err := h.SysClasses.Lookup(release.Major, query)
+	if err != nil {
+		h.send(ctx, b, chatID, lookupMessage(query, err))
+		return
+	}
+
+	s := h.Sessions.Start(chatID, nil, detect.Guess{Language: detect.Java, Confident: true})
+	h.Sessions.Update(chatID, func(s *session.Session) {
+		s.Query = class.Name
+		s.ReleaseID = release.ID
+		s.Target = release.DefaultTarget()
+	})
+	s = h.Sessions.Get(chatID)
+	if s == nil {
+		return
+	}
+
+	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   class.Name + " · from " + release.Label,
+	})
+	if err != nil {
+		h.Log.Error("sending the caption", "error", err)
+		return
+	}
+	h.Sessions.Update(chatID, func(s *session.Session) { s.MessageID = sent.ID })
+	s.MessageID = sent.ID
+
+	h.serveSystemClass(ctx, b, s, release)
+}
+
+// serveSystemClass renders one class straight out of the store.
+func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.Session, release toolchain.Release) {
+	class, err := h.SysClasses.Lookup(release.Major, s.Query)
+	if err != nil {
+		h.edit(ctx, b, s.ChatID, s.MessageID, lookupMessage(s.Query, err), ui.Keyboard(h.Catalog, s, ui.PanelRelease))
+		return
+	}
+
+	image, err := h.Renderer.Render(class.Bytes, render.Options{
+		Platform: render.JVM,
+		Kind:     render.Binary,
+		View:     s.View | render.ViewMethods,
+		Page:     uint32(s.Page),
+		Corner:   20,
+	})
+	if err != nil {
+		h.Log.Warn("rendering a system class", "class", class.Name, "error", err)
+		h.edit(ctx, b, s.ChatID, s.MessageID, "That class would not render.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		return
+	}
+	defer image.Close()
+
+	if _, err := b.SendDocument(ctx, &bot.SendDocumentParams{
+		ChatID:   s.ChatID,
+		Document: &models.InputFileUpload{Filename: attachmentName(class.Name), Data: image},
+		Caption:  class.Name,
+	}); err != nil {
+		h.Log.Error("sending a system class", "error", err)
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take it.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		return
+	}
+
+	summary := fmt.Sprintf("%s · %s · %d method(s), %d opcode(s)",
+		class.Name, release.Label, image.Stats.Methods, image.Stats.Opcodes)
+	if image.Stats.PagesTotal > 1 {
+		summary += fmt.Sprintf(" · page %d of %d", s.Page+1, image.Stats.PagesTotal)
+	}
+	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
+}
+
+// newestStocked is the newest release the store actually holds classes for. The store and the
+// catalog are built separately and can disagree, and offering a version with nothing behind it
+// would fail after the user pressed a button rather than before.
+func newestStocked(chain toolchain.Toolchain, store *sysclass.Store) (toolchain.Release, bool) {
+	stocked := store.Majors()
+	for _, release := range chain.Releases {
+		if slices.Contains(stocked, release.Major) {
+			return release, true
+		}
+	}
+	return toolchain.Release{}, false
+}
+
+// lookupMessage explains a failed lookup in the terms the user typed it.
+func lookupMessage(query string, err error) string {
+	var ambiguous *sysclass.ErrAmbiguous
+	if errors.As(err, &ambiguous) {
+		const most = 8
+		candidates := ambiguous.Candidates
+		message := fmt.Sprintf("%s matches several classes. Send the full name:\n", query)
+		for i, candidate := range candidates {
+			if i == most {
+				message += fmt.Sprintf("\n…and %d more", len(candidates)-most)
+				break
+			}
+			message += "\n" + candidate
+		}
+		return message
+	}
+	return "I have no " + query + ". Send the fully qualified name, or paste some source instead."
+}
+
 func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Session) {
+	// A system class session has nothing to compile; the class file already exists.
+	if s.Query != "" {
+		chain, ok := h.Catalog.For(detect.Java)
+		if !ok {
+			return
+		}
+		release, found := chain.Release(s.ReleaseID)
+		if !found {
+			release, found = newestStocked(chain, h.SysClasses)
+			if !found {
+				return
+			}
+		}
+		h.serveSystemClass(ctx, b, s, release)
+		return
+	}
+
 	chain, ok := h.Catalog.For(s.Language)
 	if !ok {
 		h.edit(ctx, b, s.ChatID, s.MessageID, "Pick a language first.", ui.Keyboard(h.Catalog, s, ui.PanelLanguage))

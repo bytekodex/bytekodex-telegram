@@ -1,0 +1,46 @@
+# The java.* classes of one JDK, and nothing else.
+#
+# Showing someone java.util.concurrent.ConcurrentHashMap needs no compiler: the class file is
+# already inside the JDK. This image holds it, so that path never starts a container, never runs a
+# stranger's code, and answers in the time it takes to read a file.
+#
+# The result is a scratch image containing only class files, about 26 MB per JDK. Mount it, or copy
+# it out, as <store root>/<major>/ — the store keys on the major version because the same class from
+# JDK 8 and JDK 25 is different bytecode, which is most of the reason to look.
+#
+#   docker build -f Dockerfile.sysclasses -t ghcr.io/bytekodex/sysclasses:25 \
+#     --build-arg BASE=ghcr.io/bytekodex/jdk:25 .
+
+ARG BASE
+
+FROM ${BASE} AS extract
+USER root
+
+# Two eras of JDK layout. From 9 onwards the classes live in lib/modules as a jimage, and jimage
+# extract unpacks it into one directory per module. Before that they were a plain zip: rt.jar.
+RUN set -eux; \
+    mkdir -p /out; \
+    if [ -f "${JAVA_HOME}/lib/modules" ]; then \
+        "${JAVA_HOME}/bin/jimage" extract --dir /tmp/modules "${JAVA_HOME}/lib/modules"; \
+        for module in /tmp/modules/*/; do \
+            if [ -d "${module}java" ]; then \
+                cd "${module}"; \
+                find java -name '*.class' -exec install -D {} /out/{} \; ; \
+            fi; \
+        done; \
+    else \
+        rt=""; \
+        for candidate in "${JAVA_HOME}/jre/lib/rt.jar" "${JAVA_HOME}/lib/rt.jar"; do \
+            [ -f "${candidate}" ] && rt="${candidate}" && break; \
+        done; \
+        test -n "${rt}"; \
+        cd /out; \
+        "${JAVA_HOME}/bin/jar" xf "${rt}" java; \
+        find . -type f ! -name '*.class' -delete; \
+    fi; \
+    test -f /out/java/lang/String.class; \
+    echo "extracted $(find /out -name '*.class' | wc -l) classes"
+
+# Nothing but the class files: no shell, no package manager, nothing to run. This image is data.
+FROM scratch
+COPY --from=extract /out/java /java

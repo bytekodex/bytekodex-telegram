@@ -17,6 +17,7 @@ import (
 	"github.com/bytekodex/bytekodex-telegram/internal/compile"
 	"github.com/bytekodex/bytekodex-telegram/internal/render"
 	"github.com/bytekodex/bytekodex-telegram/internal/session"
+	"github.com/bytekodex/bytekodex-telegram/internal/sysclass"
 	"github.com/bytekodex/bytekodex-telegram/internal/toolchain"
 	tgbot "github.com/go-telegram/bot"
 )
@@ -35,6 +36,7 @@ type config struct {
 	depsVolume     string
 	containerCmd   string
 	lockPath       string
+	sysClassRoot   string
 	sessionTTL     time.Duration
 	maxSourceBytes int
 	workers        int
@@ -42,7 +44,7 @@ type config struct {
 
 func load() (config, error) {
 	c := config{
-		token:        os.Getenv("BYTEKODEX_TELEGRAM_TOKEN"),
+		token: os.Getenv("BYTEKODEX_TELEGRAM_TOKEN"),
 		// Fira Code at 40, the same as the old painter used. It is the look the project already
 		// had, and the size is generous on purpose: these images get scaled down in a chat, and
 		// text that was rendered small and then shrunk further is what makes bytecode unreadable.
@@ -50,9 +52,12 @@ func load() (config, error) {
 		depsVolume:   os.Getenv("BYTEKODEX_DEPS"),
 		containerCmd: env("BYTEKODEX_CONTAINER_RUNTIME", "docker"),
 		lockPath:     env("BYTEKODEX_TOOLCHAIN_LOCK", "toolchains/lock.json"),
+		// Extracted JDK classes, one directory per major version. Optional: without it, a message
+		// that is just a class name falls through and is treated as source.
+		sysClassRoot: env("BYTEKODEX_SYSCLASSES", "/var/lib/bytekodex/sysclasses"),
 		// One renderer per core: each owns a glyph cache, and the cache is the reason they cannot
 		// simply be shared.
-		workers: runtime.GOMAXPROCS(0),
+		workers:        runtime.GOMAXPROCS(0),
 		fontSize:       40,
 		sessionTTL:     30 * time.Minute,
 		maxSourceBytes: 256 << 10,
@@ -120,6 +125,7 @@ func run() error {
 		},
 		Renderer:       renderer,
 		Catalog:        catalog,
+		SysClasses:     sysclass.Open(config.sysClassRoot),
 		Log:            log,
 		MaxSourceBytes: config.maxSourceBytes,
 	}

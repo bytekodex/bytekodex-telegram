@@ -34,6 +34,9 @@ type Release struct {
 	Preview bool
 	// EarlyAccess marks a build that is not a final release, so the caption can say so.
 	EarlyAccess bool
+	// Major is the JDK this release is, for Java, or runs on, for the others. The system class
+	// store is keyed on it.
+	Major int
 
 	// usesReleaseFlag distinguishes javac 9 and up, which takes --release, from 7 and 8, which
 	// need -source and -target.
@@ -110,6 +113,7 @@ func javaToolchain(lock *Lock) Toolchain {
 			Default:         i == 0,
 			Preview:         jdk.Preview,
 			EarlyAccess:     jdk.ReleaseStatus == "ea",
+			Major:           jdk.Major,
 			usesReleaseFlag: jdk.ReleaseFlag,
 		})
 	}
@@ -151,6 +155,7 @@ func kotlinToolchain(lock *Lock) Toolchain {
 			Image:   kotlin.Image("kotlin"),
 			Targets: targets(8, kotlin.JVMTargetMax),
 			Default: kotlin.Default,
+			Major:   kotlin.JDK,
 		})
 	}
 	slices.Reverse(releases)
@@ -184,6 +189,7 @@ func groovyToolchain(lock *Lock) Toolchain {
 			Image:   groovy.Image("groovy"),
 			Targets: targets(8, groovy.JVMTargetMax),
 			Default: groovy.Default,
+			Major:   groovy.JDK,
 		})
 	}
 	slices.Reverse(releases)

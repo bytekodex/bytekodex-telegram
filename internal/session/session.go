@@ -24,6 +24,9 @@ type Session struct {
 	ChatID    int64
 	MessageID int
 	Files     []File
+	// Query is set instead of Files when the user asked for a JDK class by name. Those need no
+	// compiler at all: the class file already exists inside every JDK.
+	Query string
 
 	Language  detect.Language
 	Detected  detect.Guess
