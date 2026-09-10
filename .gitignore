@@ -1,0 +1,5 @@
+/bin/
+bytekodex-telegram
+*.png
+*.class
+.env

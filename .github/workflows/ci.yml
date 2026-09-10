@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The render package is cgo over the platform's C ABI, so there is nothing to build here
+      # until the library exists. It is built from source rather than downloaded so that a change
+      # to the ABI breaks this job instead of production.
+      - name: Check out the platform
+        uses: actions/checkout@v5
+        with:
+          repository: bytekodex/bytekodex-platform
+          ref: master
+          path: platform
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: platform
+      - run: cargo build --release -p bk-ffi
+        working-directory: platform
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      # Renderer tests skip themselves without a monospace face installed.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+
+      - run: gofmt -l . | tee /dev/stderr | (! read)
+      - run: go vet ./...
+        env:
+          CGO_LDFLAGS: -L${{ github.workspace }}/platform/target/release
+      - run: go test -race ./...
+        env:
+          CGO_LDFLAGS: -L${{ github.workspace }}/platform/target/release
+          LD_LIBRARY_PATH: ${{ github.workspace }}/platform/target/release
