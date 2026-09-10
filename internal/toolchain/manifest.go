@@ -21,12 +21,14 @@ type Manifest struct {
 // JDKSection describes which builds to look for. The libc filter is not optional: foojay happily
 // returns musl builds for linux/x64, and those do not run on a glibc base image.
 type JDKSection struct {
-	OperatingSystem string       `json:"operating_system"`
-	Architecture    string       `json:"architecture"`
-	Libc            string       `json:"libc"`
-	ArchiveType     string       `json:"archive_type"`
-	Distributions   []string     `json:"distributions"`
-	Versions        []JDKRequest `json:"versions"`
+	OperatingSystem string `json:"operating_system"`
+	// Architectures are resolved independently, because a JDK tarball is per-architecture and the
+	// same image has to build on an x64 server and an arm64 laptop.
+	Architectures []string     `json:"architectures"`
+	Libc          string       `json:"libc"`
+	ArchiveType   string       `json:"archive_type"`
+	Distributions []string     `json:"distributions"`
+	Versions      []JDKRequest `json:"versions"`
 }
 
 // JDKRequest is one JDK we want.
@@ -83,9 +85,10 @@ type Lock struct {
 	Groovy      []LockedTool `json:"groovy"`
 }
 
-// LockedJDK is a resolved JDK download.
+// LockedJDK is a resolved JDK download, for one version on one architecture.
 type LockedJDK struct {
 	Major         int    `json:"major"`
+	Architecture  string `json:"architecture"`
 	Distribution  string `json:"distribution"`
 	JavaVersion   string `json:"java_version"`
 	ReleaseStatus string `json:"release_status"`
@@ -138,8 +141,8 @@ func (m *Manifest) validate() error {
 	if len(m.JDK.Versions) == 0 {
 		return fmt.Errorf("toolchain: the manifest offers no JDK")
 	}
-	if m.JDK.Libc == "" || m.JDK.Architecture == "" || m.JDK.OperatingSystem == "" {
-		return fmt.Errorf("toolchain: the JDK section needs operating_system, architecture and libc")
+	if m.JDK.Libc == "" || len(m.JDK.Architectures) == 0 || m.JDK.OperatingSystem == "" {
+		return fmt.Errorf("toolchain: the JDK section needs operating_system, architectures and libc")
 	}
 
 	majors := make(map[int]bool, len(m.JDK.Versions))

@@ -128,10 +128,21 @@ func TestTheSameQueryAgainstTwoVersionsReadsTwoFiles(t *testing.T) {
 	}
 }
 
-func TestAVersionTheStoreDoesNotHaveIsNotFound(t *testing.T) {
+// Saying "no such class" about java.lang.String would be absurd. The version is what is missing.
+func TestAVersionTheStoreDoesNotHaveSaysSo(t *testing.T) {
 	store := fixture(t)
-	if _, err := store.Lookup(21, "java.lang.String"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("err = %v, want ErrNotFound", err)
+
+	_, err := store.Lookup(21, "java.lang.String")
+
+	var missing *ErrNoVersion
+	if !errors.As(err, &missing) {
+		t.Fatalf("err = %v, want ErrNoVersion", err)
+	}
+	if missing.Major != 21 {
+		t.Errorf("reported JDK %d, want 21", missing.Major)
+	}
+	if len(missing.Have) == 0 {
+		t.Error("did not say which versions are there instead")
 	}
 }
 
@@ -198,8 +209,10 @@ func TestAMissingStoreIsNotAnError(t *testing.T) {
 	if store.Available() {
 		t.Error("reported itself available with nothing on disk")
 	}
-	if _, err := store.Lookup(25, "java.lang.String"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("err = %v, want ErrNotFound", err)
+	// An empty store has no version, so a lookup fails on the version rather than crashing.
+	var missing *ErrNoVersion
+	if _, err := store.Lookup(25, "java.lang.String"); !errors.As(err, &missing) {
+		t.Errorf("err = %v, want ErrNoVersion", err)
 	}
 }
 

@@ -107,7 +107,7 @@ func testResolver() *Resolver {
 func jdkSection(distributions ...string) JDKSection {
 	return JDKSection{
 		OperatingSystem: "linux",
-		Architecture:    "x64",
+		Architectures:   []string{"x64"},
 		Libc:            "glibc",
 		ArchiveType:     "tar.gz",
 		Distributions:   distributions,
@@ -125,7 +125,7 @@ func TestMuslBuildsAreSkipped(t *testing.T) {
 	hosts.details["glibc"] = fmt.Sprintf(`{"filename": "jdk.tar.gz", "direct_download_uri": %q, "checksum": "%s", "checksum_type": "sha256"}`,
 		"https://example.invalid/jdk.tar.gz", strings.Repeat("a", 64))
 
-	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin"), JDKRequest{Major: 25, ReleaseFloor: 8})
+	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin"), "x64", JDKRequest{Major: 25, ReleaseFloor: 8})
 	if err != nil {
 		t.Fatalf("resolveJDK: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestVendorPreferenceFallsThroughToWhoeverHasABuild(t *testing.T) {
 	hosts.details["z"] = fmt.Sprintf(`{"filename": "jdk.tar.gz", "direct_download_uri": "https://example.invalid/z.tar.gz", "checksum": "%s", "checksum_type": "sha256"}`,
 		strings.Repeat("b", 64))
 
-	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin", "zulu"), JDKRequest{Major: 7, ReleaseFloor: 7})
+	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin", "zulu"), "x64", JDKRequest{Major: 7, ReleaseFloor: 7})
 	if err != nil {
 		t.Fatalf("resolveJDK: %v", err)
 	}
@@ -154,15 +154,16 @@ func TestVendorPreferenceFallsThroughToWhoeverHasABuild(t *testing.T) {
 func TestEarlyAccessIsOnlyUsedWhenAllowedAndOnlyAfterGA(t *testing.T) {
 	hosts := newFakeHosts(t)
 	hosts.packages["28/temurin/ea"] = `[{"id": "e", "distribution": "temurin", "java_version": "28-ea+14", "release_status": "ea", "lib_c_type": "glibc"}]`
-	hosts.details["e"] = fmt.Sprintf(`{"filename": "jdk.tar.gz", "direct_download_uri": "https://example.invalid/e.tar.gz", "checksum": "%s", "checksum_type": "sha256"}`,
-		strings.Repeat("c", 64))
+	// The URL points at the fake server because an EA archive always gets hashed now.
+	hosts.details["e"] = fmt.Sprintf(`{"filename": "jdk.tar.gz", "direct_download_uri": %q, "checksum": "%s", "checksum_type": "sha256"}`,
+		hosts.server.URL+"/adoptium/temurin28-binaries/releases/download/jdk-28/jdk.tar.gz", strings.Repeat("c", 64))
 
 	section := jdkSection("temurin")
-	if _, err := testResolver().resolveJDK(context.Background(), section, JDKRequest{Major: 28, ReleaseFloor: 8}); err == nil {
+	if _, err := testResolver().resolveJDK(context.Background(), section, "x64", JDKRequest{Major: 28, ReleaseFloor: 8}); err == nil {
 		t.Error("used an EA build without being allowed to")
 	}
 
-	resolved, err := testResolver().resolveJDK(context.Background(), section, JDKRequest{Major: 28, ReleaseFloor: 8, AllowEarlyAccess: true})
+	resolved, err := testResolver().resolveJDK(context.Background(), section, "x64", JDKRequest{Major: 28, ReleaseFloor: 8, AllowEarlyAccess: true})
 	if err != nil {
 		t.Fatalf("resolveJDK: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestARepublishedArchiveTakesTheHostsChecksumOverFoojays(t *testing.T) {
 		asset, hosts.downloadURL("adoptium", "temurin28-binaries", "jdk-28+14-ea-beta", asset), stale)
 	hosts.digests[asset] = actual
 
-	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin"),
+	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin"), "x64",
 		JDKRequest{Major: 28, ReleaseFloor: 8, AllowEarlyAccess: true})
 	if err != nil {
 		t.Fatalf("resolveJDK: %v", err)
@@ -252,7 +253,7 @@ func TestAChecksumThatIsNotSHA256IsNotTrusted(t *testing.T) {
 	hosts.details["m"] = fmt.Sprintf(`{"filename": "jdk.tar.gz", "direct_download_uri": %q, "checksum": "0badc0de", "checksum_type": "md5"}`,
 		hosts.server.URL+"/somewhere/jdk.tar.gz")
 
-	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin"), JDKRequest{Major: 25, ReleaseFloor: 8})
+	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin"), "x64", JDKRequest{Major: 25, ReleaseFloor: 8})
 	if err != nil {
 		t.Fatalf("resolveJDK: %v", err)
 	}
@@ -261,5 +262,36 @@ func TestAChecksumThatIsNotSHA256IsNotTrusted(t *testing.T) {
 	}
 	if len(resolved.SHA256) != 64 {
 		t.Errorf("sha256 = %q, want the archive to have been hashed instead", resolved.SHA256)
+	}
+}
+
+// The failure mode this guards against is subtle: GitHub allows sixty anonymous requests an hour,
+// a full resolve makes more, and once the digest lookups start failing an EA build would fall back
+// to foojay's metadata — which for EA is exactly the thing known to go stale. So when the digest is
+// unavailable, the archive gets hashed instead.
+func TestAnEarlyAccessBuildIsNeverTrustedToFoojaysChecksum(t *testing.T) {
+	hosts := newFakeHosts(t)
+	stale := strings.Repeat("d", 64)
+	asset := "OpenJDK-jdk_x64_linux_hotspot_28_14-ea.tar.gz"
+
+	hosts.packages["28/temurin/ea"] = `[{"id": "r", "distribution": "temurin", "java_version": "28-ea+14", "release_status": "ea", "lib_c_type": "glibc"}]`
+	hosts.details["r"] = fmt.Sprintf(`{"filename": %q, "direct_download_uri": %q, "checksum": %q, "checksum_type": "sha256"}`,
+		asset, hosts.downloadURL("adoptium", "temurin28-binaries", "jdk-28+14-ea-beta", asset), stale)
+	// No digest published: this is the rate-limited case.
+
+	resolved, err := testResolver().resolveJDK(context.Background(), jdkSection("temurin"), "x64",
+		JDKRequest{Major: 28, ReleaseFloor: 8, AllowEarlyAccess: true})
+	if err != nil {
+		t.Fatalf("resolveJDK: %v", err)
+	}
+
+	if resolved.SHA256 == stale {
+		t.Fatal("trusted foojay's checksum for an early-access build")
+	}
+	if len(resolved.SHA256) != 64 {
+		t.Errorf("sha256 = %q, want the archive to have been hashed", resolved.SHA256)
+	}
+	if hosts.hits["download"] == 0 {
+		t.Error("never fetched the archive it had to hash")
 	}
 }

@@ -141,7 +141,7 @@ func TestLanguagesWithNoReleasesAreNotOffered(t *testing.T) {
 
 func TestManifestRejectsACompilerPinnedToAMissingJDK(t *testing.T) {
 	manifest := &Manifest{
-		JDK:    JDKSection{OperatingSystem: "linux", Architecture: "x64", Libc: "glibc", Versions: []JDKRequest{{Major: 25}}},
+		JDK:    JDKSection{OperatingSystem: "linux", Architectures: []string{"x64"}, Libc: "glibc", Versions: []JDKRequest{{Major: 25}}},
 		Kotlin: VersionSection{Versions: []VersionRequest{{Version: "2.4.20", JDK: 17}}},
 	}
 	err := manifest.validate()
@@ -152,7 +152,7 @@ func TestManifestRejectsACompilerPinnedToAMissingJDK(t *testing.T) {
 
 func TestManifestRejectsTwoReleasesOnOneLine(t *testing.T) {
 	manifest := &Manifest{
-		JDK: JDKSection{OperatingSystem: "linux", Architecture: "x64", Libc: "glibc", Versions: []JDKRequest{{Major: 25}}},
+		JDK: JDKSection{OperatingSystem: "linux", Architectures: []string{"x64"}, Libc: "glibc", Versions: []JDKRequest{{Major: 25}}},
 		Kotlin: VersionSection{Versions: []VersionRequest{
 			{Version: "2.4.10", JDK: 25},
 			{Version: "2.4.20", JDK: 25},
@@ -193,8 +193,14 @@ func TestShippedLockCoversTheManifest(t *testing.T) {
 		t.Fatalf("LoadLock: %v", err)
 	}
 
-	if len(lock.JDK) != len(manifest.JDK.Versions) {
-		t.Errorf("lock has %d JDKs, manifest asks for %d", len(lock.JDK), len(manifest.JDK.Versions))
+	// The lock holds one entry per version per architecture, so versions are what to compare.
+	if got, want := len(lock.Majors()), len(manifest.JDK.Versions); got != want {
+		t.Errorf("lock has %d JDK versions, manifest asks for %d", got, want)
+	}
+	for _, major := range lock.Majors() {
+		if len(lock.Architectures(major)) == 0 {
+			t.Errorf("JDK %d has no architecture", major)
+		}
 	}
 	for _, jdk := range lock.JDK {
 		if len(jdk.SHA256) != 64 {

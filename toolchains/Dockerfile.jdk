@@ -1,26 +1,47 @@
-# One JDK, from a URL the resolver pinned.
+# One JDK, from URLs the resolver pinned.
 #
-# There is deliberately no version anywhere in this file. `toolchainctl plan` supplies the URL and
-# the checksum out of lock.json, which is how JDK 7 and JDK 28 come out of the same three lines.
+# There is deliberately no version anywhere in this file. `toolchainctl plan` supplies the URLs and
+# checksums out of lock.json, which is how JDK 7 and JDK 28 come out of the same few lines.
+#
+# A JDK tarball is per-architecture, so both are passed in and TARGETARCH decides. That keeps one
+# command working on an x64 server and an arm64 laptop, and with buildx it produces one image that
+# holds both.
 #
 #   docker build -f Dockerfile.jdk -t ghcr.io/bytekodex/jdk:25 \
-#     --build-arg URL=... --build-arg SHA256=... .
+#     --build-arg URL_AMD64=... --build-arg SHA256_AMD64=... \
+#     --build-arg URL_ARM64=... --build-arg SHA256_ARM64=... .
 
 ARG BASE=debian:trixie-slim
 
 FROM ${BASE} AS download
-ARG URL
-ARG SHA256
+ARG TARGETARCH
+ARG URL_AMD64
+ARG SHA256_AMD64
+ARG URL_ARM64
+ARG SHA256_ARM64
 
 RUN set -eux; \
-    test -n "${URL}"; test -n "${SHA256}"; \
+    case "${TARGETARCH}" in \
+        amd64) url="${URL_AMD64}"; sum="${SHA256_AMD64}" ;; \
+        arm64) url="${URL_ARM64}"; sum="${SHA256_ARM64}" ;; \
+        *) echo "no JDK pinned for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    test -n "${url}"; test -n "${sum}"; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
-    curl -fsSL --retry 3 -o /tmp/jdk.tar.gz "${URL}"; \
-    echo "${SHA256}  /tmp/jdk.tar.gz" | sha256sum -c -; \
-    mkdir -p /opt/jdk; \
-    tar -xzf /tmp/jdk.tar.gz -C /opt/jdk --strip-components=1; \
+    curl -fsSL --retry 3 -o /tmp/jdk.tar.gz "${url}"; \
+    echo "${sum}  /tmp/jdk.tar.gz" | sha256sum -c -; \
+    mkdir -p /tmp/stage; \
+    tar -xzf /tmp/jdk.tar.gz -C /tmp/stage; \
     rm /tmp/jdk.tar.gz; \
+    # Where the home directory sits inside the archive is not worth guessing. Twenty-two versions
+    # from six vendors nest it differently, and some list their entries as ./jdk-9+181/... so that
+    # stripping one component removes the dot and leaves the directory behind. So the compiler is
+    # found and its home derived from it, whatever depth that turns out to be.
+    javac="$(find /tmp/stage -type f -name javac -path '*/bin/javac' | head -1)"; \
+    test -n "${javac}"; \
+    mv "$(dirname "$(dirname "${javac}")")" /opt/jdk; \
+    rm -rf /tmp/stage; \
     /opt/jdk/bin/javac -version
 
 FROM ${BASE}

@@ -66,7 +66,7 @@ func TestEveryCallbackFitsTheLimit(t *testing.T) {
 		for _, release := range chain.Releases {
 			store.Update(1, func(s *session.Session) { s.ReleaseID = release.ID })
 			for _, panel := range []Panel{PanelMain, PanelLanguage, PanelRelease, PanelTarget, PanelView} {
-				for _, row := range Keyboard(catalog, s, panel).InlineKeyboard {
+				for _, row := range Keyboard(catalog, s, panel, nil).InlineKeyboard {
 					for _, button := range row {
 						if len(button.CallbackData) > maxCallbackData {
 							t.Errorf("%q carries %d bytes of callback data", button.Text, len(button.CallbackData))
@@ -82,12 +82,12 @@ func TestMainPanelOffersCompileOnlyForAKnownLanguage(t *testing.T) {
 	store := session.NewStore(0)
 
 	unknown := store.Start(1, nil, detect.Guess{Language: detect.Unknown})
-	if hasButton(t, Keyboard(testCatalog(), unknown, PanelMain), "Compile") {
+	if hasButton(t, Keyboard(testCatalog(), unknown, PanelMain, nil), "Compile") {
 		t.Error("offered to compile a snippet with no language")
 	}
 
 	known := store.Start(2, nil, detect.Guess{Language: detect.Kotlin, Confident: true})
-	if !hasButton(t, Keyboard(testCatalog(), known, PanelMain), "Compile") {
+	if !hasButton(t, Keyboard(testCatalog(), known, PanelMain, nil), "Compile") {
 		t.Error("no Compile button for Kotlin")
 	}
 }
@@ -146,6 +146,69 @@ func TestViewSummaryReadsAsEnglish(t *testing.T) {
 	if got := viewSummary(render.ViewMethods | render.ViewLocals); !strings.Contains(got, "locals") {
 		t.Errorf("viewSummary = %q, want locals mentioned", got)
 	}
+}
+
+// fakeStock stands in for a machine where only some of the sysclasses images were extracted.
+type fakeStock []int
+
+func (f fakeStock) Majors() []int { return f }
+
+func TestAVersionPanelForASystemClassOnlyOffersStockedVersions(t *testing.T) {
+	catalog := testCatalog()
+	store := session.NewStore(0)
+	s := store.Start(1, nil, detect.Guess{Language: detect.Java, Confident: true})
+	store.Update(1, func(s *session.Session) { s.Query = "java.lang.String" })
+	s = store.Get(1)
+
+	// The catalog knows 8 and 25; the store only has 8, so 25 must not be offered for a lookup.
+	if got := countReleaseButtons(Keyboard(catalog, s, PanelRelease, fakeStock{8})); got != 1 {
+		t.Errorf("offered %d versions for a lookup, want only the stocked one", got)
+	}
+
+	// While compiling there is a compiler behind every button, so the whole catalog is on offer.
+	store.Update(1, func(s *session.Session) { s.Query = "" })
+	if got := countReleaseButtons(Keyboard(catalog, store.Get(1), PanelRelease, fakeStock{8})); got != 2 {
+		t.Errorf("offered %d versions to compile against, want the whole catalog", got)
+	}
+}
+
+// Twenty-two Java releases one per row would be a list long enough to scroll past.
+func TestTheVersionPanelPacksSeveralVersionsPerRow(t *testing.T) {
+	lock := &toolchain.Lock{}
+	for major := 7; major <= 28; major++ {
+		lock.JDK = append(lock.JDK, toolchain.LockedJDK{
+			Major: major, ReleaseFloor: 8, ReleaseFlag: major >= 9, ReleaseStatus: "ga",
+		})
+	}
+	store := session.NewStore(0)
+	s := store.Start(1, nil, detect.Guess{Language: detect.Java, Confident: true})
+
+	markup := Keyboard(toolchain.FromLock(lock), s, PanelRelease, nil)
+
+	if got := countReleaseButtons(markup); got != 22 {
+		t.Fatalf("%d version buttons, want 22", got)
+	}
+	rows := len(markup.InlineKeyboard) - 1 // the last row is Back
+	if rows > 6 {
+		t.Errorf("22 versions in %d rows, want them packed %d to a row", rows, releasesPerRow)
+	}
+	for _, row := range markup.InlineKeyboard {
+		if len(row) > releasesPerRow {
+			t.Errorf("row of %d buttons, want at most %d", len(row), releasesPerRow)
+		}
+	}
+}
+
+func countReleaseButtons(markup *models.InlineKeyboardMarkup) int {
+	count := 0
+	for _, row := range markup.InlineKeyboard {
+		for _, button := range row {
+			if decoded, err := Decode(button.CallbackData); err == nil && decoded.Action == ActionSetRelease {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func hasButton(t *testing.T, markup *models.InlineKeyboardMarkup, text string) bool {

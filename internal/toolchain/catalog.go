@@ -99,8 +99,15 @@ func (c *Catalog) Languages() []detect.Language {
 /* ---------- per-language assembly ---------- */
 
 func javaToolchain(lock *Lock) Toolchain {
-	releases := make([]Release, 0, len(lock.JDK))
-	for i, jdk := range lock.SortedJDK() {
+	majors := lock.Majors()
+	releases := make([]Release, 0, len(majors))
+	for i, major := range majors {
+		// One release per version, not per architecture: which tarball a machine downloads is a
+		// build-time detail and has nothing to do with what a user picks.
+		jdk, ok := lock.Representative(major)
+		if !ok {
+			continue
+		}
 		label := fmt.Sprintf("JDK %d", jdk.Major)
 		if jdk.ReleaseStatus == "ea" {
 			label += " (early access)"

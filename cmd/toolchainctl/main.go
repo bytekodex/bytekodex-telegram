@@ -8,11 +8,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/bytekodex/bytekodex-telegram/internal/toolchain"
@@ -24,6 +29,7 @@ commands:
   resolve   read the manifest, look every download up, write the lock
   plan      print the docker build commands the lock implies
   show      summarize the lock as a table
+  probe     ask the built images what their compilers actually support
 
 flags:
   -dir string   directory holding manifest.json and lock.json (default "toolchains")
@@ -55,6 +61,8 @@ func main() {
 		err = plan(lockPath)
 	case "show":
 		err = show(lockPath)
+	case "probe":
+		err = probe(lockPath)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -105,10 +113,30 @@ func plan(lockPath string) error {
 	}
 
 	// JDK images first: every compiler image is built on top of one.
-	for _, jdk := range lock.SortedJDK() {
-		fmt.Printf("docker build -f toolchains/Dockerfile.jdk -t %s \\\n", jdk.Image())
-		fmt.Printf("  --build-arg URL=%s \\\n", jdk.URL)
-		fmt.Printf("  --build-arg SHA256=%s \\\n", jdk.SHA256)
+	for _, major := range lock.Majors() {
+		entries := lock.Architectures(major)
+		representative, _ := lock.Representative(major)
+
+		// One image per version, carrying every architecture it was resolved for. The Dockerfile
+		// picks by TARGETARCH, so the same command works on an x64 server and an arm64 laptop, and
+		// with buildx it produces one multi-architecture image.
+		platforms := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			platforms = append(platforms, "linux/"+dockerArch(entry.Architecture))
+		}
+
+		fmt.Printf("docker build -f toolchains/Dockerfile.jdk -t %s \\\n", representative.Image())
+		fmt.Printf("  --platform %s \\\n", strings.Join(platforms, ","))
+		for _, entry := range entries {
+			suffix := strings.ToUpper(dockerArch(entry.Architecture))
+			fmt.Printf("  --build-arg URL_%s=%s \\\n", suffix, entry.URL)
+			fmt.Printf("  --build-arg SHA256_%s=%s \\\n", suffix, entry.SHA256)
+		}
+		fmt.Printf("  toolchains\n")
+
+		// The system classes come out of the JDK image, so they are planned next to it.
+		fmt.Printf("docker build -f toolchains/Dockerfile.sysclasses -t %s \\\n", sysclassImage(major))
+		fmt.Printf("  --build-arg BASE=%s \\\n", representative.Image())
 		fmt.Printf("  toolchains\n")
 	}
 
@@ -121,12 +149,26 @@ func plan(lockPath string) error {
 	return nil
 }
 
+// dockerArch translates foojay's architecture names into Docker's.
+func dockerArch(architecture string) string {
+	switch architecture {
+	case "x64", "x86_64", "amd64":
+		return "amd64"
+	case "aarch64", "arm64":
+		return "arm64"
+	default:
+		return architecture
+	}
+}
+
+func sysclassImage(major int) string {
+	return fmt.Sprintf("%s/sysclasses:%d", toolchain.ImagePrefix, major)
+}
+
 func printToolBuild(language string, tool toolchain.LockedTool, lock *toolchain.Lock) {
 	base := ""
-	for _, jdk := range lock.JDK {
-		if jdk.Major == tool.JDK {
-			base = jdk.Image()
-		}
+	if representative, ok := lock.Representative(tool.JDK); ok {
+		base = representative.Image()
 	}
 
 	fmt.Printf("docker build -f toolchains/Dockerfile.%s -t %s \\\n", language, tool.Image(language))
@@ -145,13 +187,21 @@ func show(lockPath string) error {
 	fmt.Printf("resolved %s\n\n", lock.GeneratedAt.Format("2006-01-02 15:04 MST"))
 
 	fmt.Println("JDK")
-	for _, jdk := range lock.SortedJDK() {
+	for _, major := range lock.Majors() {
+		entries := lock.Architectures(major)
+		jdk := entries[0]
+
 		flag := "--release"
 		if !jdk.ReleaseFlag {
 			flag = "-source/-target"
 		}
-		fmt.Printf("  %-3d %-16s %-18s %-3s %s, floor %d\n",
-			jdk.Major, jdk.Distribution, jdk.JavaVersion, jdk.ReleaseStatus, flag, jdk.ReleaseFloor)
+		arches := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			arches = append(arches, entry.Architecture)
+		}
+		fmt.Printf("  %-3d %-16s %-18s %-3s %-14s floor %-2d %s\n",
+			major, jdk.Distribution, jdk.JavaVersion, jdk.ReleaseStatus, flag, jdk.ReleaseFloor,
+			strings.Join(arches, "+"))
 	}
 
 	for name, entries := range map[string][]toolchain.LockedTool{"Kotlin": lock.Kotlin, "Groovy": lock.Groovy} {
@@ -159,6 +209,144 @@ func show(lockPath string) error {
 		for _, entry := range entries {
 			fmt.Printf("  %-8s on JDK %-3d up to bytecode %s\n", entry.Version, entry.JDK, entry.JVMTargetMax)
 		}
+	}
+	return nil
+}
+
+// probe asks the compilers themselves what they support, rather than trusting what the manifest
+// claims. The manifest has to state a release floor before any image exists, and a wrong floor
+// means a button that fails only when someone presses it. Images that were never built are
+// skipped, so this is useful with two of them and with all of them.
+func probe(lockPath string) error {
+	lock, err := toolchain.LoadLock(lockPath)
+	if err != nil {
+		return err
+	}
+
+	runtime := "docker"
+	if found := os.Getenv("BYTEKODEX_RUNTIME"); found != "" {
+		runtime = found
+	}
+
+	disagreements := 0
+	skipped := 0
+	for _, major := range lock.Majors() {
+		entry, _ := lock.Representative(major)
+
+		floor, err := probeFloor(runtime, entry.Image())
+		switch {
+		case errors.Is(err, errNoImage):
+			skipped++
+			continue
+		case err != nil:
+			return fmt.Errorf("jdk %d: %w", major, err)
+		}
+
+		mark := "ok"
+		if floor != entry.ReleaseFloor {
+			mark = fmt.Sprintf("manifest says %d", entry.ReleaseFloor)
+			disagreements++
+		}
+		fmt.Printf("  jdk %-3d floor %-3d %s\n", major, floor, mark)
+	}
+
+	if skipped > 0 {
+		fmt.Printf("%d version(s) skipped, no image built\n", skipped)
+	}
+	if disagreements > 0 {
+		return fmt.Errorf("%d version(s) disagree with the manifest", disagreements)
+	}
+	return nil
+}
+
+// errNoImage separates "not built yet", which is normal, from a real failure.
+var errNoImage = errors.New("image not present")
+
+// probeFloor reads the oldest release javac will target. javac 8 and earlier have no --release at
+// all and no list to read, so their floor is their own version.
+func probeFloor(runtime, image string) (int, error) {
+	if err := exec.Command(runtime, "image", "inspect", image).Run(); err != nil {
+		return 0, errNoImage
+	}
+
+	output, err := exec.Command(runtime, "run", "--rm", "--network", "none", image,
+		"javac", "--help").CombinedOutput()
+	if err != nil {
+		// javac 7 and 8 exit non-zero on --help and do not know the flag either way.
+		if version, versionErr := probeVersion(runtime, image); versionErr == nil {
+			return version, nil
+		}
+		return 0, fmt.Errorf("%s: %w", runtime, err)
+	}
+
+	releases := supportedReleases(string(output))
+	if len(releases) == 0 {
+		return probeVersion(runtime, image)
+	}
+	return slices.Min(releases), nil
+}
+
+// probeVersion reads the compiler's own version, which is the floor when it cannot target older.
+func probeVersion(runtime, image string) (int, error) {
+	output, err := exec.Command(runtime, "run", "--rm", "--network", "none", image,
+		"javac", "-version").CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("javac -version: %w", err)
+	}
+
+	// "javac 1.8.0_504" and "javac 25.0.4" both have to come out as a major version.
+	fields := strings.Fields(string(output))
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("cannot read a version from %q", output)
+	}
+	number := strings.TrimPrefix(fields[len(fields)-1], "1.")
+	if cut := strings.IndexAny(number, "._-+"); cut > 0 {
+		number = number[:cut]
+	}
+	return strconv.Atoi(number)
+}
+
+// supportedReleases pulls the version list out of javac's help text. Two shapes exist, and reading
+// only one of them silently loses the first version in the list:
+//
+//	Compile for a specific release. Supported releases: 7, 8, 9, 10, 11, 12
+//
+//	Supported releases:
+//	    8, 9, 10, ... 25
+//
+// and javac 9, the first version to have --release at all, calls them targets instead:
+//
+//	Compile for a specific VM version. Supported targets: 6, 7, 8, 9
+var releaseListHeadings = []string{"Supported releases:", "Supported targets:"}
+
+func supportedReleases(help string) []int {
+	lines := strings.Split(help, "\n")
+	for i, line := range lines {
+		at, heading := -1, ""
+		for _, candidate := range releaseListHeadings {
+			if found := strings.Index(line, candidate); found >= 0 {
+				at, heading = found, candidate
+				break
+			}
+		}
+		if at < 0 {
+			continue
+		}
+
+		// The heading is not always at the start of the line, and the list is on the next line
+		// when it does not fit on this one.
+		text := strings.TrimSpace(line[at+len(heading):])
+		if text == "" && i+1 < len(lines) {
+			text = strings.TrimSpace(lines[i+1])
+		}
+
+		var releases []int
+		for _, field := range strings.Split(text, ",") {
+			if version, err := strconv.Atoi(strings.TrimSpace(field)); err == nil {
+				releases = append(releases, version)
+			}
+		}
+		return releases
 	}
 	return nil
 }

@@ -22,7 +22,28 @@ RUN set -eux; \
     echo "${SHA256}  /tmp/kotlin.zip" | sha256sum -c -; \
     unzip -q /tmp/kotlin.zip -d /opt; \
     rm /tmp/kotlin.zip; \
-    test -x /opt/kotlinc/bin/kotlinc
+    test -x /opt/kotlinc/bin/kotlinc; \
+    # kotlinc colours its output through jansi, which extracts a native library into the temp
+    # directory and runs it. Our temp directory is a noexec tmpfs, so that fails loudly on every
+    # single compile — exit code stays zero, but the error lands in the user's output.
+    #
+    # Extracting it here instead solves it without giving anything up: --read-only makes the root
+    # file system unwritable, not unexecutable, so jansi can load the library from a path it could
+    # never have written to.
+    mkdir -p /opt/jansi; \
+    case "$(uname -m)" in \
+        aarch64|arm64) native=Linux/arm64 ;; \
+        x86_64|amd64) native=Linux/x86_64 ;; \
+        *) native="" ;; \
+    esac; \
+    if [ -n "${native}" ]; then \
+        cd /opt/jansi; \
+        "${JAVA_HOME}/bin/jar" xf /opt/kotlinc/lib/kotlin-compiler.jar \
+            "org/fusesource/jansi/internal/native/${native}/libjansi.so" || true; \
+        found="$(find /opt/jansi -name libjansi.so | head -1)"; \
+        [ -n "${found}" ] && mv "${found}" /opt/jansi/libjansi.so || true; \
+        rm -rf /opt/jansi/org; \
+    fi
 
 FROM ${BASE}
 USER root
@@ -31,9 +52,16 @@ COPY --from=download /opt/kotlinc /opt/kotlinc
 # The launcher is a shell script that resolves JAVA_HOME, which the base image already sets.
 ENV PATH=/opt/kotlinc/bin:$PATH
 
-# kotlinc writes its daemon state and temporary files under HOME. With no writable home it falls
-# back to the JVM temp directory, which the caller mounts as a tmpfs.
-ENV JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=/tmp
+COPY --from=download /opt/jansi /opt/jansi
+
+# kotlinc writes its temporary files under HOME. With no writable home it falls back to the JVM
+# temp directory, which the caller mounts as a tmpfs. library.jansi.path points the native loader
+# at the copy baked into the image, so it never tries to write one.
+#
+# JAVA_OPTS rather than JAVA_TOOL_OPTIONS: the launcher passes it straight to java, whereas
+# JAVA_TOOL_OPTIONS makes the JVM announce itself on stderr, and that line would end up rendered
+# as part of a compile error. The heap defaults the launcher would have set are kept.
+ENV JAVA_OPTS="-Xmx512M -Xms128M -Djava.io.tmpdir=/tmp -Dlibrary.jansi.path=/opt/jansi"
 
 USER 1000:1000
 WORKDIR /work

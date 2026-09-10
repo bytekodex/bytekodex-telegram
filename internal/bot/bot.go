@@ -104,7 +104,7 @@ func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      s.ChatID,
 		Text:        ui.Caption(h.Catalog, s),
-		ReplyMarkup: ui.Keyboard(h.Catalog, s, ui.PanelMain),
+		ReplyMarkup: ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses),
 	})
 	if err != nil {
 		h.Log.Error("sending the keyboard", "error", err)
@@ -226,7 +226,7 @@ func (h *Handler) systemClass(ctx context.Context, b *bot.Bot, chatID int64, que
 func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.Session, release toolchain.Release) {
 	class, err := h.SysClasses.Lookup(release.Major, s.Query)
 	if err != nil {
-		h.edit(ctx, b, s.ChatID, s.MessageID, lookupMessage(s.Query, err), ui.Keyboard(h.Catalog, s, ui.PanelRelease))
+		h.edit(ctx, b, s.ChatID, s.MessageID, lookupMessage(s.Query, err), ui.Keyboard(h.Catalog, s, ui.PanelRelease, h.SysClasses))
 		return
 	}
 
@@ -239,7 +239,7 @@ func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.S
 	})
 	if err != nil {
 		h.Log.Warn("rendering a system class", "class", class.Name, "error", err)
-		h.edit(ctx, b, s.ChatID, s.MessageID, "That class would not render.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "That class would not render.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 	defer image.Close()
@@ -250,7 +250,7 @@ func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.S
 		Caption:  class.Name,
 	}); err != nil {
 		h.Log.Error("sending a system class", "error", err)
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take it.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take it.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 
@@ -259,7 +259,7 @@ func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.S
 	if image.Stats.PagesTotal > 1 {
 		summary += fmt.Sprintf(" · page %d of %d", s.Page+1, image.Stats.PagesTotal)
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
+	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 }
 
 // newestStocked is the newest release the store actually holds classes for. The store and the
@@ -291,6 +291,19 @@ func lookupMessage(query string, err error) string {
 		}
 		return message
 	}
+	var missing *sysclass.ErrNoVersion
+	if errors.As(err, &missing) {
+		message := fmt.Sprintf("I don't have the JDK %d class library on hand", missing.Major)
+		if len(missing.Have) > 0 {
+			labels := make([]string, 0, len(missing.Have))
+			for _, major := range missing.Have {
+				labels = append(labels, strconv.Itoa(major))
+			}
+			message += ". I do have " + strings.Join(labels, ", ")
+		}
+		return message + "."
+	}
+
 	return "I have no " + query + ". Send the fully qualified name, or paste some source instead."
 }
 
@@ -314,7 +327,7 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 
 	chain, ok := h.Catalog.For(s.Language)
 	if !ok {
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Pick a language first.", ui.Keyboard(h.Catalog, s, ui.PanelLanguage))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Pick a language first.", ui.Keyboard(h.Catalog, s, ui.PanelLanguage, h.SysClasses))
 		return
 	}
 	release := chain.DefaultRelease()
@@ -373,13 +386,13 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 	}
 
 	if len(media) == 0 {
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Compiled, but nothing could be rendered.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Compiled, but nothing could be rendered.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 
 	if err := h.sendImages(ctx, b, s, media); err != nil {
 		h.Log.Error("sending images", "error", err)
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take the images.", ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take the images.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 
@@ -388,7 +401,7 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 	if skipped := len(result.Artifacts) - len(media); skipped > 0 {
 		summary += fmt.Sprintf(" · %d not shown", skipped)
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
+	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 }
 
 // sendImages uses an album for several classes and a single document for one, because a media
@@ -411,7 +424,7 @@ func (h *Handler) repaint(ctx context.Context, b *bot.Bot, s *session.Session, p
 	if s == nil {
 		return
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, ui.Caption(h.Catalog, s), ui.Keyboard(h.Catalog, s, panel))
+	h.edit(ctx, b, s.ChatID, s.MessageID, ui.Caption(h.Catalog, s), ui.Keyboard(h.Catalog, s, panel, h.SysClasses))
 }
 
 func (h *Handler) edit(ctx context.Context, b *bot.Bot, chatID int64, messageID int, text string, markup models.ReplyMarkup) {
@@ -454,7 +467,7 @@ func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *sessi
 	summary, output := compileMessage(failure)
 
 	if output == "" {
-		h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 
@@ -467,7 +480,7 @@ func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *sessi
 		// Better a wall of text than nothing at all, but truncated: a generated file can produce
 		// hundreds of diagnostics and Telegram rejects a message over 4096 characters.
 		h.edit(ctx, b, s.ChatID, s.MessageID, summary+"\n\n"+firstLines(output, 25),
-			ui.Keyboard(h.Catalog, s, ui.PanelMain))
+			ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 	defer image.Close()
@@ -480,7 +493,7 @@ func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *sessi
 	if err != nil {
 		h.Log.Error("sending a diagnostic", "error", err)
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
+	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 }
 
 // compileMessage separates the one-line summary from the compiler's output, so the summary can

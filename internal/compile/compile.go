@@ -133,8 +133,13 @@ func (c *Container) Compile(
 	defer cancel()
 
 	command := chain.Command(release, target, names)
-	if classpath := chain.ClasspathArg(depsDir); classpath != "" {
-		command = append(command[:1:1], append([]string{"-cp", classpath}, command[1:]...)...)
+	// Only name the dependency directory when it is actually mounted. Pointing a classpath at a
+	// directory that is not there is not fatal, but every compile then carries a warning about it,
+	// and that warning would be shown to whoever sent the snippet.
+	if c.DepsVolume != "" {
+		if classpath := chain.ClasspathArg(depsDir); classpath != "" {
+			command = append(command[:1:1], append([]string{"-cp", classpath}, command[1:]...)...)
+		}
 	}
 
 	started := time.Now()

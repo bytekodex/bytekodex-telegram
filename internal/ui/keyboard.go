@@ -8,6 +8,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/bytekodex/bytekodex-telegram/internal/detect"
@@ -148,13 +149,19 @@ func Caption(catalog *toolchain.Catalog, s *session.Session) string {
 	return b.String()
 }
 
-// Keyboard builds the markup for a panel.
-func Keyboard(catalog *toolchain.Catalog, s *session.Session, panel Panel) *models.InlineKeyboardMarkup {
+// Stock reports which JDK versions have system classes stored for them. It is an interface rather
+// than the store itself so that this package keeps knowing nothing about how classes are stored.
+type Stock interface {
+	Majors() []int
+}
+
+// Keyboard builds the markup for a panel. stock may be nil, which offers every version.
+func Keyboard(catalog *toolchain.Catalog, s *session.Session, panel Panel, stock Stock) *models.InlineKeyboardMarkup {
 	switch panel {
 	case PanelLanguage:
 		return languagePanel(catalog, s)
 	case PanelRelease:
-		return releasePanel(catalog, s)
+		return releasePanel(catalog, s, stock)
 	case PanelTarget:
 		return targetPanel(catalog, s)
 	case PanelView:
@@ -210,20 +217,44 @@ func languagePanel(catalog *toolchain.Catalog, s *session.Session) *models.Inlin
 	return withBack(rows)
 }
 
-func releasePanel(catalog *toolchain.Catalog, s *session.Session) *models.InlineKeyboardMarkup {
+// releasesPerRow keeps the version panel readable. Every Java release from 7 to 28 is offered, and
+// one button per row would be a list long enough to scroll.
+const releasesPerRow = 4
+
+func releasePanel(catalog *toolchain.Catalog, s *session.Session, stock Stock) *models.InlineKeyboardMarkup {
 	chain, ok := catalog.For(s.Language)
 	if !ok {
 		return mainPanel(catalog, s)
 	}
+
+	// While a system class is on screen there is nothing to compile, only bytes to read off disk,
+	// so the only versions worth offering are the ones the store actually holds.
+	var stocked []int
+	if s.Query != "" && stock != nil {
+		stocked = stock.Majors()
+	}
+
 	var rows [][]models.InlineKeyboardButton
+	var row []models.InlineKeyboardButton
 	for _, release := range chain.Releases {
+		if stocked != nil && !slices.Contains(stocked, release.Major) {
+			continue
+		}
+
 		label := release.Label
 		if release.ID == s.ReleaseID {
 			label = "· " + label
 		}
-		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: label, CallbackData: Encode(ActionSetRelease, release.ID)},
+		row = append(row, models.InlineKeyboardButton{
+			Text: label, CallbackData: Encode(ActionSetRelease, release.ID),
 		})
+		if len(row) == releasesPerRow {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
 	}
 	return withBack(rows)
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -36,12 +37,23 @@ func (r *Resolver) Resolve(ctx context.Context, manifest *Manifest) (*Lock, erro
 	lock := &Lock{GeneratedAt: time.Now().UTC().Truncate(time.Second)}
 
 	for _, request := range manifest.JDK.Versions {
-		resolved, err := r.resolveJDK(ctx, manifest.JDK, request)
-		if err != nil {
-			return nil, err
+		found := 0
+		for _, architecture := range manifest.JDK.Architectures {
+			resolved, err := r.resolveJDK(ctx, manifest.JDK, architecture, request)
+			if err != nil {
+				// One architecture missing is a fact about the world, not a failure: nobody ever
+				// shipped an aarch64 build of JDK 7. Missing on every architecture is a failure.
+				r.Log("jdk %d/%s: %v", request.Major, architecture, err)
+				continue
+			}
+			r.Log("jdk %d/%s: %s %s (%s)", resolved.Major, architecture,
+				resolved.Distribution, resolved.JavaVersion, resolved.ReleaseStatus)
+			lock.JDK = append(lock.JDK, *resolved)
+			found++
 		}
-		r.Log("jdk %d: %s %s (%s)", resolved.Major, resolved.Distribution, resolved.JavaVersion, resolved.ReleaseStatus)
-		lock.JDK = append(lock.JDK, *resolved)
+		if found == 0 {
+			return nil, fmt.Errorf("toolchain: no build of JDK %d on any requested architecture", request.Major)
+		}
 	}
 
 	for _, request := range manifest.Kotlin.Versions {
@@ -96,7 +108,7 @@ type foojayDetail struct {
 // resolveJDK picks the first distribution in the manifest's preference order that has a build.
 // Vendors differ per version — JDK 7 exists only as Zulu, and 27 and 28 only as early access —
 // so the order is a preference, not a requirement.
-func (r *Resolver) resolveJDK(ctx context.Context, section JDKSection, request JDKRequest) (*LockedJDK, error) {
+func (r *Resolver) resolveJDK(ctx context.Context, section JDKSection, architecture string, request JDKRequest) (*LockedJDK, error) {
 	statuses := []string{"ga"}
 	if request.AllowEarlyAccess {
 		// GA first even when EA is allowed: a version can go GA between two resolver runs.
@@ -105,7 +117,7 @@ func (r *Resolver) resolveJDK(ctx context.Context, section JDKSection, request J
 
 	for _, status := range statuses {
 		for _, distribution := range section.Distributions {
-			packages, err := r.foojayPackages(ctx, section, request.Major, distribution, status)
+			packages, err := r.foojayPackages(ctx, section, architecture, request.Major, distribution, status)
 			if err != nil {
 				return nil, err
 			}
@@ -124,6 +136,13 @@ func (r *Resolver) resolveJDK(ctx context.Context, section JDKSection, request J
 				}
 				sum := detail.Checksum
 				if detail.ChecksumType != "" && detail.ChecksumType != "sha256" {
+					sum = ""
+				}
+				// An early-access build is republished under the same tag as new builds appear, so
+				// foojay's copy of its checksum is only as fresh as the last time foojay looked.
+				// For those the metadata is not evidence: either the host confirms the bytes, or
+				// they get hashed. GA archives are immutable, so there foojay is fine.
+				if pkg.ReleaseStatus == "ea" {
 					sum = ""
 				}
 
@@ -151,6 +170,7 @@ func (r *Resolver) resolveJDK(ctx context.Context, section JDKSection, request J
 				}
 				return &LockedJDK{
 					Major:         request.Major,
+					Architecture:  architecture,
 					Distribution:  pkg.Distribution,
 					JavaVersion:   pkg.JavaVersion,
 					ReleaseStatus: pkg.ReleaseStatus,
@@ -166,17 +186,16 @@ func (r *Resolver) resolveJDK(ctx context.Context, section JDKSection, request J
 		}
 	}
 
-	return nil, fmt.Errorf("toolchain: no %s/%s/%s build of JDK %d from %s",
-		section.OperatingSystem, section.Architecture, section.Libc,
-		request.Major, strings.Join(section.Distributions, ", "))
+	return nil, fmt.Errorf("no %s/%s/%s build from %s",
+		section.OperatingSystem, architecture, section.Libc, strings.Join(section.Distributions, ", "))
 }
 
-func (r *Resolver) foojayPackages(ctx context.Context, section JDKSection, major int, distribution, status string) ([]foojayPackage, error) {
+func (r *Resolver) foojayPackages(ctx context.Context, section JDKSection, architecture string, major int, distribution, status string) ([]foojayPackage, error) {
 	query := url.Values{}
 	query.Set("version", fmt.Sprint(major))
 	query.Set("package_type", "jdk")
 	query.Set("operating_system", section.OperatingSystem)
-	query.Set("architecture", section.Architecture)
+	query.Set("architecture", architecture)
 	query.Set("archive_type", section.ArchiveType)
 	query.Set("distribution", distribution)
 	query.Set("release_status", status)
@@ -344,6 +363,15 @@ func (r *Resolver) getJSON(ctx context.Context, address string, into any) error 
 	}
 	request.Header.Set("Accept", "application/json")
 
+	// Anonymous callers get sixty GitHub requests an hour, and this resolver makes more than that
+	// in one run. Without a token the digest lookups start failing partway through, which used to
+	// mean quietly falling back to metadata that could be stale.
+	if strings.HasPrefix(address, GitHubAPI) {
+		if token := githubToken(); token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
+
 	response, err := r.HTTP.Do(request)
 	if err != nil {
 		return fmt.Errorf("toolchain: GET %s: %w", address, err)
@@ -416,9 +444,49 @@ func (r *Resolver) hashRemote(ctx context.Context, address string) (string, erro
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-// SortedJDK returns the locked JDKs newest first, which is the order a keyboard wants.
-func (l *Lock) SortedJDK() []LockedJDK {
-	out := slices.Clone(l.JDK)
-	slices.SortFunc(out, func(a, b LockedJDK) int { return b.Major - a.Major })
+// Majors lists the locked JDK versions newest first, which is the order a keyboard wants.
+func (l *Lock) Majors() []int {
+	seen := map[int]bool{}
+	var majors []int
+	for _, jdk := range l.JDK {
+		if !seen[jdk.Major] {
+			seen[jdk.Major] = true
+			majors = append(majors, jdk.Major)
+		}
+	}
+	slices.SortFunc(majors, func(a, b int) int { return b - a })
+	return majors
+}
+
+// Architectures returns every locked download for one version.
+func (l *Lock) Architectures(major int) []LockedJDK {
+	var out []LockedJDK
+	for _, jdk := range l.JDK {
+		if jdk.Major == major {
+			out = append(out, jdk)
+		}
+	}
+	slices.SortFunc(out, func(a, b LockedJDK) int { return strings.Compare(a.Architecture, b.Architecture) })
 	return out
+}
+
+// Representative is the entry a catalog reads a version's metadata from. Which architecture it
+// comes from does not matter: release_floor, the flag style and the status describe the version.
+func (l *Lock) Representative(major int) (LockedJDK, bool) {
+	entries := l.Architectures(major)
+	if len(entries) == 0 {
+		return LockedJDK{}, false
+	}
+	return entries[0], true
+}
+
+// githubToken reads a token from the environment. Both names are checked because the CLI and the
+// Actions runner disagree about which one to set.
+func githubToken() string {
+	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if token := strings.TrimSpace(os.Getenv(name)); token != "" {
+			return token
+		}
+	}
+	return ""
 }

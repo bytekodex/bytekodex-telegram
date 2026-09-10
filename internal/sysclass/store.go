@@ -26,6 +26,17 @@ import (
 // ErrNotFound means no class matched. It is an ordinary outcome: people misremember names.
 var ErrNotFound = errors.New("sysclass: no such class")
 
+// ErrNoVersion means the store holds nothing for that JDK version. Each version is extracted into
+// its own directory, so a version can be missing while every other one is there.
+type ErrNoVersion struct {
+	Major int
+	Have  []int
+}
+
+func (e *ErrNoVersion) Error() string {
+	return fmt.Sprintf("sysclass: no classes stored for JDK %d", e.Major)
+}
+
 // ErrAmbiguous carries the candidates when a simple name matches several classes, which is common
 // enough that guessing would be wrong: List is both java.util.List and java.awt.List.
 type ErrAmbiguous struct {
@@ -104,6 +115,13 @@ func (s *Store) Lookup(major int, query string) (*Class, error) {
 	s.build()
 	if s.indexErr != nil {
 		return nil, s.indexErr
+	}
+
+	// "we never stocked that version" and "no such class" are different answers, and telling
+	// someone their class does not exist when the truth is that JDK 14 was never extracted would
+	// send them looking for a mistake they did not make.
+	if !slices.Contains(s.Majors(), major) {
+		return nil, &ErrNoVersion{Major: major, Have: s.Majors()}
 	}
 
 	normalized, ok := Normalize(query)
