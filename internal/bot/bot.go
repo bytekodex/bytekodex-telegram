@@ -55,17 +55,26 @@ func (h *Handler) Register(b *bot.Bot) {
 	}, h.code)
 }
 
-const greeting = `Drop in some JVM source and I will show you the bytecode.
+// greeting names the languages the catalog actually has, so it cannot promise a compiler that
+// was never locked.
+func (h *Handler) greeting() string {
+	names := make([]string, 0, 4)
+	for _, language := range h.Catalog.Languages() {
+		names = append(names, language.Display())
+	}
 
-I will guess the language, you can change it, and everything else has a sensible default. Kotlin, Java, Groovy and Scala, several versions each.`
+	return "Drop in some JVM source and I will show you the bytecode.\n\n" +
+		"I will guess the language, you can change it, and everything else has a sensible default. " +
+		strings.Join(names, ", ") + ", several versions each."
+}
 
 func (h *Handler) start(ctx context.Context, b *bot.Bot, update *models.Update) {
-	h.send(ctx, b, update.Message.Chat.ID, greeting)
+	h.send(ctx, b, update.Message.Chat.ID, h.greeting())
 }
 
 func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 	message := update.Message
-	code := strings.TrimSpace(stripFence(message.Text))
+	code := normalizeSource(stripFence(message.Text))
 
 	if len(code) < minCodeLength {
 		return
@@ -175,7 +184,7 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 
 	result, err := h.Compiler.Compile(ctx, chain, release, target, s.Files)
 	if err != nil {
-		h.edit(ctx, b, s.ChatID, s.MessageID, compileMessage(err), ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		h.reportCompileFailure(ctx, b, s, err)
 		return
 	}
 
@@ -289,16 +298,87 @@ func (h *Handler) answer(ctx context.Context, b *bot.Bot, queryID, text string) 
 	}
 }
 
-func compileMessage(err error) string {
+// reportCompileFailure shows the compiler's own words, rendered rather than pasted.
+//
+// A diagnostic is the second most common thing a user sees here, and a chat message flattens
+// everything that makes one readable: which file, which line, what the caret pointed at. So it
+// goes through the same renderer as the bytecode would have, and only falls back to text if even
+// that fails.
+func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *session.Session, failure error) {
+	summary, output := compileMessage(failure)
+
+	if output == "" {
+		h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		return
+	}
+
+	image, renderErr := h.Renderer.Render([]byte(output), render.Options{
+		Kind:   render.Diagnostic,
+		Corner: 20,
+	})
+	if renderErr != nil {
+		h.Log.Warn("rendering a diagnostic", "error", renderErr)
+		// Better a wall of text than nothing at all, but truncated: a generated file can produce
+		// hundreds of diagnostics and Telegram rejects a message over 4096 characters.
+		h.edit(ctx, b, s.ChatID, s.MessageID, summary+"\n\n"+firstLines(output, 25),
+			ui.Keyboard(h.Catalog, s, ui.PanelMain))
+		return
+	}
+	defer image.Close()
+
+	_, err := b.SendDocument(ctx, &bot.SendDocumentParams{
+		ChatID:   s.ChatID,
+		Document: &models.InputFileUpload{Filename: "diagnostics.png", Data: image},
+		Caption:  summary,
+	})
+	if err != nil {
+		h.Log.Error("sending a diagnostic", "error", err)
+	}
+	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain))
+}
+
+// compileMessage separates the one-line summary from the compiler's output, so the summary can
+// be a caption and the output can be an image.
+func compileMessage(err error) (summary, output string) {
 	var failed *compile.Failed
 	switch {
 	case errors.Is(err, compile.ErrTimeout):
-		return "That took too long to compile."
+		return "That took too long to compile.", ""
 	case errors.As(err, &failed):
-		return "The compiler was not happy:\n\n" + failed.Output
+		if failed.Output == "" {
+			return "The compiler produced neither classes nor a message.", ""
+		}
+		return "The compiler was not happy.", failed.Output
 	default:
-		return "Something went wrong while compiling."
+		return "Something went wrong while compiling.", ""
 	}
+}
+
+// firstLines is the fallback for when even rendering failed.
+func firstLines(text string, n int) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) > n {
+		lines = append(lines[:n], "…")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// normalizeSource cleans up pasted text before anything looks at it.
+//
+// Trailing whitespace is not cosmetic here: the image is as wide as its longest line, so a line
+// padded with spaces makes every page wider and slower to render for no visible reason. Carriage
+// returns matter for the same reason — a stray \r would be measured as a glyph.
+func normalizeSource(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t\v\f\u00a0")
+	}
+
+	// Blank lines at either end contribute rows to the page and nothing to the reader.
+	return strings.Trim(strings.Join(lines, "\n"), "\n")
 }
 
 // stripFence removes a Markdown code fence, which is how most people paste code into Telegram.

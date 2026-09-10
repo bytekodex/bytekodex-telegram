@@ -43,16 +43,17 @@ type config struct {
 func load() (config, error) {
 	c := config{
 		token:        os.Getenv("BYTEKODEX_TELEGRAM_TOKEN"),
-		fontPath:     env("BYTEKODEX_FONT", "/usr/share/fonts/truetype/jetbrains/JetBrainsMono-Regular.ttf"),
+		// Fira Code at 40, the same as the old painter used. It is the look the project already
+		// had, and the size is generous on purpose: these images get scaled down in a chat, and
+		// text that was rendered small and then shrunk further is what makes bytecode unreadable.
+		fontPath:     env("BYTEKODEX_FONT", "/usr/share/fonts/truetype/firacode/FiraCode-Regular.ttf"),
 		depsVolume:   os.Getenv("BYTEKODEX_DEPS"),
 		containerCmd: env("BYTEKODEX_CONTAINER_RUNTIME", "docker"),
 		lockPath:     env("BYTEKODEX_TOOLCHAIN_LOCK", "toolchains/lock.json"),
 		// One renderer per core: each owns a glyph cache, and the cache is the reason they cannot
 		// simply be shared.
 		workers: runtime.GOMAXPROCS(0),
-		// Render time is linear in pixel count, and 40 gives pages of 18 megapixels that a client
-		// shows scaled down anyway. 28 halves the work for output nobody can tell apart.
-		fontSize:       28,
+		fontSize:       40,
 		sessionTTL:     30 * time.Minute,
 		maxSourceBytes: 256 << 10,
 	}

@@ -48,6 +48,12 @@ extern "C" {
 
 #define BK_INPUT_BINARY            1u /* raw .class bytes */
 #define BK_INPUT_DISASSEMBLY_TEXT  2u /* javap output pasted by a user */
+/*
+ * Compiler output. Rendered like everything else, because an error is the second most common
+ * thing a user reads and plain text throws away which line and column it was about. Belongs to
+ * no bytecode format, so `platform` is ignored for it.
+ */
+#define BK_INPUT_DIAGNOSTIC        3u
 
 /* View flags. Zero means BK_VIEW_METHODS. */
 #define BK_VIEW_METHODS       (1u << 0)

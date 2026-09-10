@@ -153,3 +153,36 @@ func TestTooLargeAPageIsRefused(t *testing.T) {
 		t.Errorf("unhelpful error: %v", err)
 	}
 }
+
+// A compile error takes the same path as bytecode: rendered, not pasted. It needs no platform,
+// because at that point there is no class file to name one for.
+func TestADiagnosticRendersWithoutAPlatform(t *testing.T) {
+	renderer, err := New(font(t), 24, 1)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer renderer.Close()
+
+	const output = "Demo.java:7:15: error: cannot find symbol\n" +
+		"        return couts.size();\n" +
+		"               ^\n" +
+		"  symbol:   variable couts\n" +
+		"1 error"
+
+	image, err := renderer.Render([]byte(output), Options{Kind: Diagnostic})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	defer image.Close()
+
+	header := make([]byte, 8)
+	if _, err := image.Read(header); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !bytes.Equal(header, []byte("\x89PNG\r\n\x1a\n")) {
+		t.Fatalf("not a PNG: %x", header)
+	}
+	if image.Stats.Opcodes != 0 {
+		t.Errorf("a diagnostic has no opcodes, got %d", image.Stats.Opcodes)
+	}
+}

@@ -39,6 +39,8 @@ type InputKind uint32
 const (
 	Binary          InputKind = C.BK_INPUT_BINARY
 	DisassemblyText InputKind = C.BK_INPUT_DISASSEMBLY_TEXT
+	// Diagnostic is compiler output. It renders like a dump and needs no platform.
+	Diagnostic InputKind = C.BK_INPUT_DIAGNOSTIC
 )
 
 // View selects which sections of a class appear in the output.
