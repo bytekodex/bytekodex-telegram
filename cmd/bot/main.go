@@ -46,8 +46,10 @@ func load() (config, error) {
 		containerCmd: env("BYTEKODEX_CONTAINER_RUNTIME", "docker"),
 		// One renderer per core: each owns a glyph cache, and the cache is the reason they cannot
 		// simply be shared.
-		workers:        runtime.GOMAXPROCS(0),
-		fontSize:       40,
+		workers: runtime.GOMAXPROCS(0),
+		// Render time is linear in pixel count, and 40 gives pages of 18 megapixels that a client
+		// shows scaled down anyway. 28 halves the work for output nobody can tell apart.
+		fontSize:       28,
 		sessionTTL:     30 * time.Minute,
 		maxSourceBytes: 256 << 10,
 	}

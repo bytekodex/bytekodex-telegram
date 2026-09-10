@@ -202,10 +202,15 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 			continue
 		}
 		images = append(images, image)
+		// Documents rather than photos. sendPhoto re-encodes on Telegram's servers, and JPEG on
+		// small sharp glyphs is exactly the wrong trade: the whole product here is legible text.
+		// A document keeps the bytes, and the width+height cap does not apply to it either.
+		//
 		// The PNG is streamed straight out of the buffer Rust wrote it into: no temporary file,
 		// and no second copy of the bytes.
-		media = append(media, &models.InputMediaPhoto{
-			Media:           "attach://" + attachmentName(artifact.Name),
+		name := attachmentName(artifact.Name)
+		media = append(media, &models.InputMediaDocument{
+			Media:           "attach://" + name,
 			MediaAttachment: image,
 			Caption:         artifact.Name,
 		})
@@ -230,15 +235,15 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(s, ui.PanelMain))
 }
 
-// sendImages uses an album for several classes and a plain photo for one, because a media group
-// of one is rejected.
+// sendImages uses an album for several classes and a single document for one, because a media
+// group of one is rejected.
 func (h *Handler) sendImages(ctx context.Context, b *bot.Bot, s *session.Session, media []models.InputMedia) error {
 	if len(media) == 1 {
-		photo := media[0].(*models.InputMediaPhoto)
-		_, err := b.SendPhoto(ctx, &bot.SendPhotoParams{
-			ChatID:  s.ChatID,
-			Photo:   &models.InputFileUpload{Filename: attachmentName(photo.Caption), Data: photo.MediaAttachment},
-			Caption: photo.Caption,
+		only := media[0].(*models.InputMediaDocument)
+		_, err := b.SendDocument(ctx, &bot.SendDocumentParams{
+			ChatID:   s.ChatID,
+			Document: &models.InputFileUpload{Filename: attachmentName(only.Caption), Data: only.MediaAttachment},
+			Caption:  only.Caption,
 		})
 		return err
 	}

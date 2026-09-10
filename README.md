@@ -46,6 +46,10 @@ temporary file to clean up, and the buffer goes back to the pool when the upload
 The buffer belongs to Go, so nothing crosses the boundary owning memory. If a page does not fit,
 the library reports the exact size it needs and one retry is always enough.
 
+Pages go out as documents rather than photos. `sendPhoto` re-encodes on Telegram's servers, and
+JPEG on small sharp glyphs is the worst case for the one thing this bot is for. A document keeps
+the bytes exactly as rendered, and the width-plus-height cap of 10 000 does not apply to it.
+
 ## Compiling is running
 
 Compiling source from a stranger executes their code. Groovy runs global AST transformations and
@@ -74,7 +78,7 @@ go run ./cmd/bot
 | --- | --- | --- |
 | `BYTEKODEX_TELEGRAM_TOKEN` | — | Required |
 | `BYTEKODEX_FONT` | a JetBrains Mono path | Single TrueType face; a `.ttc` is refused |
-| `BYTEKODEX_FONT_SIZE` | `40` | |
+| `BYTEKODEX_FONT_SIZE` | `28` | Render cost is linear in pixels, and a client scales the image down anyway |
 | `BYTEKODEX_DEPS` | — | Directory of jars mounted read-only for the classpath |
 | `BYTEKODEX_CONTAINER_RUNTIME` | `docker` | `podman` works too |
 | `BYTEKODEX_SESSION_TTL` | `30m` | How long a pasted snippet is remembered |
