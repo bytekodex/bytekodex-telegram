@@ -8,6 +8,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"html"
 	"slices"
 	"strings"
 
@@ -32,8 +33,6 @@ const (
 	ActionToggleView Action = "view"
 	// ActionCompile does the work.
 	ActionCompile Action = "go"
-	// ActionPage moves between rendered pages.
-	ActionPage Action = "page"
 	// ActionCancel drops the session.
 	ActionCancel Action = "x"
 )
@@ -140,7 +139,9 @@ func Caption(catalog *toolchain.Catalog, s *session.Session) string {
 		if target == "" {
 			target = release.DefaultTarget()
 		}
-		fmt.Fprintf(&b, "\n%s", toolchain.Describe(s.Language, release, target))
+		// This line is sent as HTML (see the bot package's edit/send), and code-styling it reads
+		// as what it is: an identifier and a version, not prose.
+		fmt.Fprintf(&b, "\n<code>%s</code>", html.EscapeString(toolchain.Describe(s.Language, release, target)))
 	}
 
 	if n := len(s.Files); n > 1 {
@@ -183,22 +184,24 @@ func mainPanel(catalog *toolchain.Catalog, s *session.Session) *models.InlineKey
 	}
 
 	rows := [][]models.InlineKeyboardButton{{
-		{Text: "Language: " + s.Language.Display(), CallbackData: Encode(ActionOpen, string(PanelLanguage))},
+		{Text: "🔤 Language: " + s.Language.Display(), CallbackData: Encode(ActionOpen, string(PanelLanguage))},
 	}}
 	if known {
+		// Show sits right under the language, above Version/Target: it is the one choice that
+		// applies no matter what gets picked below it, so it reads before them, not after.
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: "Version: " + release.Label, CallbackData: Encode(ActionOpen, string(PanelRelease))},
-			{Text: "Target: " + target, CallbackData: Encode(ActionOpen, string(PanelTarget))},
+			{Text: "👁 Show: " + viewSummary(s.View), CallbackData: Encode(ActionOpen, string(PanelView))},
 		})
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: "Show: " + viewSummary(s.View), CallbackData: Encode(ActionOpen, string(PanelView))},
+			{Text: "🏷️ Version: " + release.Label, CallbackData: Encode(ActionOpen, string(PanelRelease))},
+			{Text: "🎯 Target: " + target, CallbackData: Encode(ActionOpen, string(PanelTarget))},
 		})
 		rows = append(rows, []models.InlineKeyboardButton{
-			{Text: "Compile", CallbackData: Encode(ActionCompile, "")},
+			{Text: "🔨 Compile", CallbackData: Encode(ActionCompile, "")},
 		})
 	}
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "Discard", CallbackData: Encode(ActionCancel, "")},
+		{Text: "🗑️ Discard", CallbackData: Encode(ActionCancel, "")},
 	})
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -295,29 +298,9 @@ func viewPanel(s *session.Session) *models.InlineKeyboardMarkup {
 	return withBack(rows)
 }
 
-// Pager is the strip under a rendered page. It is omitted for a single page rather than shown
-// disabled, since a button that does nothing is worse than no button.
-func Pager(page, total int) *models.InlineKeyboardMarkup {
-	if total <= 1 {
-		return nil
-	}
-	row := []models.InlineKeyboardButton{}
-	if page > 0 {
-		row = append(row, models.InlineKeyboardButton{Text: "‹", CallbackData: Encode(ActionPage, fmt.Sprint(page-1))})
-	}
-	row = append(row, models.InlineKeyboardButton{
-		Text:         fmt.Sprintf("%d / %d", page+1, total),
-		CallbackData: Encode(ActionPage, fmt.Sprint(page)),
-	})
-	if page+1 < total {
-		row = append(row, models.InlineKeyboardButton{Text: "›", CallbackData: Encode(ActionPage, fmt.Sprint(page+1))})
-	}
-	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
-}
-
 func withBack(rows [][]models.InlineKeyboardButton) *models.InlineKeyboardMarkup {
 	rows = append(rows, []models.InlineKeyboardButton{
-		{Text: "Back", CallbackData: Encode(ActionOpen, string(PanelMain))},
+		{Text: "↩️ Back", CallbackData: Encode(ActionOpen, string(PanelMain))},
 	})
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }

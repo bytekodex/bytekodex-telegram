@@ -34,7 +34,6 @@ func TestEncodeDecodeRoundTrips(t *testing.T) {
 		{Action: ActionCompile},
 		{Action: ActionSetLanguage, Value: "kotlin"},
 		{Action: ActionOpen, Value: string(PanelView)},
-		{Action: ActionPage, Value: "12"},
 	}
 	for _, want := range cases {
 		got, err := Decode(Encode(want.Action, want.Value))
@@ -108,22 +107,6 @@ func TestCaptionStatesTheGuessWithoutAsking(t *testing.T) {
 	none := store.Start(3, nil, detect.Guess{})
 	if caption := Caption(testCatalog(), none); strings.Contains(caption, "?") {
 		t.Errorf("caption asks a question: %q", caption)
-	}
-}
-
-func TestPagerAppearsOnlyWhenThereIsSomewhereToGo(t *testing.T) {
-	if Pager(0, 1) != nil {
-		t.Error("built a pager for a single page")
-	}
-	markup := Pager(1, 3)
-	if markup == nil {
-		t.Fatal("no pager for three pages")
-	}
-	if got := len(markup.InlineKeyboard[0]); got != 3 {
-		t.Errorf("middle page has %d buttons, want back, counter and forward", got)
-	}
-	if first := Pager(0, 3); len(first.InlineKeyboard[0]) != 2 {
-		t.Error("first page should not offer a back button")
 	}
 }
 
@@ -211,11 +194,14 @@ func countReleaseButtons(markup *models.InlineKeyboardMarkup) int {
 	return count
 }
 
+// hasButton matches on substring rather than exact text: a button's icon is cosmetic, and a test
+// asserting "Compile" appears somewhere should not need editing every time the icon in front of
+// it changes.
 func hasButton(t *testing.T, markup *models.InlineKeyboardMarkup, text string) bool {
 	t.Helper()
 	for _, row := range markup.InlineKeyboard {
 		for _, button := range row {
-			if button.Text == text {
+			if strings.Contains(button.Text, text) {
 				return true
 			}
 		}

@@ -93,7 +93,8 @@ func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 	limit := h.MaxSourceBytes
 	if limit > 0 && len(code) > limit {
-		h.send(ctx, b, message.Chat.ID, fmt.Sprintf("That is %d KiB of source; I top out at %d KiB.", len(code)>>10, limit>>10))
+		h.send(ctx, b, message.Chat.ID, fail+fmt.Sprintf("That is %s of source; I top out at %s.",
+			bold(fmt.Sprintf("%d KiB", len(code)>>10)), bold(fmt.Sprintf("%d KiB", limit>>10))))
 		return
 	}
 
@@ -104,6 +105,7 @@ func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      s.ChatID,
 		Text:        ui.Caption(h.Catalog, s),
+		ParseMode:   models.ParseModeHTML,
 		ReplyMarkup: ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses),
 	})
 	if err != nil {
@@ -164,13 +166,6 @@ func (h *Handler) callback(ctx context.Context, b *bot.Bot, update *models.Updat
 	case ui.ActionCompile:
 		h.compileAndSend(ctx, b, s)
 
-	case ui.ActionPage:
-		page, err := strconv.Atoi(press.Value)
-		if err != nil {
-			return
-		}
-		h.Sessions.Update(chatID, func(s *session.Session) { s.Page = page })
-
 	case ui.ActionCancel:
 		h.Sessions.Delete(chatID)
 		h.edit(ctx, b, chatID, s.MessageID, "Dropped.", nil)
@@ -193,7 +188,7 @@ func (h *Handler) systemClass(ctx context.Context, b *bot.Bot, chatID int64, que
 
 	class, err := h.SysClasses.Lookup(release.Major, query)
 	if err != nil {
-		h.send(ctx, b, chatID, lookupMessage(query, err))
+		h.send(ctx, b, chatID, fail+lookupMessage(query, err))
 		return
 	}
 
@@ -209,8 +204,9 @@ func (h *Handler) systemClass(ctx context.Context, b *bot.Bot, chatID int64, que
 	}
 
 	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   class.Name + " · from " + release.Label,
+		ChatID:    chatID,
+		Text:      code(class.Name) + " · from " + bold(release.Label),
+		ParseMode: models.ParseModeHTML,
 	})
 	if err != nil {
 		h.Log.Error("sending the caption", "error", err)
@@ -222,42 +218,81 @@ func (h *Handler) systemClass(ctx context.Context, b *bot.Bot, chatID int64, que
 	h.serveSystemClass(ctx, b, s, release)
 }
 
-// serveSystemClass renders one class straight out of the store.
+// serveSystemClass renders every page of one class straight out of the store and sends them all
+// at once — there used to be a page picker instead, but a button the user has to notice and press
+// just to see the rest of a class they already asked for was worse than sending the whole thing.
 func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.Session, release toolchain.Release) {
 	class, err := h.SysClasses.Lookup(release.Major, s.Query)
 	if err != nil {
-		h.edit(ctx, b, s.ChatID, s.MessageID, lookupMessage(s.Query, err), ui.Keyboard(h.Catalog, s, ui.PanelRelease, h.SysClasses))
+		h.edit(ctx, b, s.ChatID, s.MessageID, fail+lookupMessage(s.Query, err), ui.Keyboard(h.Catalog, s, ui.PanelRelease, h.SysClasses))
 		return
 	}
 
-	image, err := h.Renderer.Render(class.Bytes, render.Options{
+	options := render.Options{
 		Platform: render.JVM,
 		Kind:     render.Binary,
 		View:     s.View | render.ViewMethods,
-		Page:     uint32(s.Page),
 		Corner:   20,
-	})
+	}
+
+	stats, err := h.Renderer.Pages(class.Bytes, options)
 	if err != nil {
-		h.Log.Warn("rendering a system class", "class", class.Name, "error", err)
-		h.edit(ctx, b, s.ChatID, s.MessageID, "That class would not render.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+		h.Log.Warn("counting pages for a system class", "class", class.Name, "error", err)
+		h.edit(ctx, b, s.ChatID, s.MessageID, fail+"That class would not render.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
-	defer image.Close()
 
-	if _, err := b.SendDocument(ctx, &bot.SendDocumentParams{
-		ChatID:   s.ChatID,
-		Document: &models.InputFileUpload{Filename: attachmentName(class.Name), Data: image},
-		Caption:  class.Name,
-	}); err != nil {
+	total := max(int(stats.PagesTotal), 1)
+	if total > maxImagesPerAlbum {
+		total = maxImagesPerAlbum
+	}
+
+	images := make([]*render.Image, 0, total)
+	defer func() {
+		for _, image := range images {
+			image.Close()
+		}
+	}()
+	for page := range total {
+		pageOptions := options
+		pageOptions.Page = uint32(page)
+		image, err := h.Renderer.Render(class.Bytes, pageOptions)
+		if err != nil {
+			h.Log.Warn("rendering a system class page", "class", class.Name, "page", page, "error", err)
+			break
+		}
+		images = append(images, image)
+	}
+	if len(images) == 0 {
+		h.edit(ctx, b, s.ChatID, s.MessageID, fail+"That class would not render.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+		return
+	}
+
+	media := make([]models.InputMedia, 0, len(images))
+	base := attachmentName(class.Name)
+	for i, image := range images {
+		name, caption := base, class.Name
+		if len(images) > 1 {
+			name = fmt.Sprintf("%s.p%d.png", strings.TrimSuffix(base, ".png"), i+1)
+			caption = fmt.Sprintf("%s (%d/%d)", class.Name, i+1, len(images))
+		}
+		media = append(media, &models.InputMediaDocument{
+			Media:           "attach://" + name,
+			MediaAttachment: image,
+			Caption:         caption,
+		})
+	}
+
+	if err := h.sendImages(ctx, b, s, media); err != nil {
 		h.Log.Error("sending a system class", "error", err)
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take it.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+		h.edit(ctx, b, s.ChatID, s.MessageID, fail+"Rendered, but Telegram would not take it.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 
-	summary := fmt.Sprintf("%s · %s · %d method(s), %d opcode(s)",
-		class.Name, release.Label, image.Stats.Methods, image.Stats.Opcodes)
-	if image.Stats.PagesTotal > 1 {
-		summary += fmt.Sprintf(" · page %d of %d", s.Page+1, image.Stats.PagesTotal)
+	summary := fmt.Sprintf("%s%s · %s · %s method(s), %s opcode(s)",
+		success, code(class.Name), bold(release.Label), bold(fmt.Sprint(stats.Methods)), bold(fmt.Sprint(stats.Opcodes)))
+	if stats.PagesTotal > 1 {
+		summary += fmt.Sprintf(" · Rendered pages: %s", bold(fmt.Sprint(len(images))))
 	}
 	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 }
@@ -281,30 +316,30 @@ func lookupMessage(query string, err error) string {
 	if errors.As(err, &ambiguous) {
 		const most = 8
 		candidates := ambiguous.Candidates
-		message := fmt.Sprintf("%s matches several classes. Send the full name:\n", query)
+		message := code(query) + " matches several classes. Send the full name:\n"
 		for i, candidate := range candidates {
 			if i == most {
-				message += fmt.Sprintf("\n…and %d more", len(candidates)-most)
+				message += fmt.Sprintf("\n…and %s more", bold(fmt.Sprint(len(candidates)-most)))
 				break
 			}
-			message += "\n" + candidate
+			message += "\n" + code(candidate)
 		}
 		return message
 	}
 	var missing *sysclass.ErrNoVersion
 	if errors.As(err, &missing) {
-		message := fmt.Sprintf("I don't have the JDK %d class library on hand", missing.Major)
+		message := "I don't have the " + bold(fmt.Sprintf("JDK %d", missing.Major)) + " class library on hand"
 		if len(missing.Have) > 0 {
 			labels := make([]string, 0, len(missing.Have))
 			for _, major := range missing.Have {
 				labels = append(labels, strconv.Itoa(major))
 			}
-			message += ". I do have " + strings.Join(labels, ", ")
+			message += ". I do have " + bold(strings.Join(labels, ", "))
 		}
 		return message + "."
 	}
 
-	return "I have no " + query + ". Send the fully qualified name, or paste some source instead."
+	return "I have no " + code(query) + ". Send the fully qualified name, or paste some source instead."
 }
 
 func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Session) {
@@ -327,7 +362,7 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 
 	chain, ok := h.Catalog.For(s.Language)
 	if !ok {
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Pick a language first.", ui.Keyboard(h.Catalog, s, ui.PanelLanguage, h.SysClasses))
+		h.edit(ctx, b, s.ChatID, s.MessageID, fail+"Pick a language first.", ui.Keyboard(h.Catalog, s, ui.PanelLanguage, h.SysClasses))
 		return
 	}
 	release := chain.DefaultRelease()
@@ -339,7 +374,7 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 		target = release.DefaultTarget()
 	}
 
-	h.edit(ctx, b, s.ChatID, s.MessageID, "Compiling with "+release.Label+"…", nil)
+	h.edit(ctx, b, s.ChatID, s.MessageID, "Compiling with "+bold(release.Label)+"…", nil)
 
 	result, err := h.Compiler.Compile(ctx, chain, release, target, s.Files)
 	if err != nil {
@@ -386,20 +421,20 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 	}
 
 	if len(media) == 0 {
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Compiled, but nothing could be rendered.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+		h.edit(ctx, b, s.ChatID, s.MessageID, fail+"Compiled, but nothing could be rendered.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 
 	if err := h.sendImages(ctx, b, s, media); err != nil {
 		h.Log.Error("sending images", "error", err)
-		h.edit(ctx, b, s.ChatID, s.MessageID, "Rendered, but Telegram would not take the images.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+		h.edit(ctx, b, s.ChatID, s.MessageID, fail+"Rendered, but Telegram would not take the images.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 
-	summary := fmt.Sprintf("%s · %d class(es) in %s", toolchain.Describe(s.Language, release, target),
-		len(result.Artifacts), result.Took.Round(time.Millisecond))
+	summary := fmt.Sprintf("%s%s · %s class(es) in %s", success, code(toolchain.Describe(s.Language, release, target)),
+		bold(fmt.Sprint(len(result.Artifacts))), result.Took.Round(time.Millisecond))
 	if skipped := len(result.Artifacts) - len(media); skipped > 0 {
-		summary += fmt.Sprintf(" · %d not shown", skipped)
+		summary += fmt.Sprintf(" · %s not shown", bold(fmt.Sprint(skipped)))
 	}
 	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 }
@@ -432,6 +467,7 @@ func (h *Handler) edit(ctx context.Context, b *bot.Bot, chatID int64, messageID 
 		ChatID:      chatID,
 		MessageID:   messageID,
 		Text:        text,
+		ParseMode:   models.ParseModeHTML,
 		ReplyMarkup: markup,
 	})
 	// Editing a message to what it already says is an error Telegram reports and we do not care
@@ -442,7 +478,9 @@ func (h *Handler) edit(ctx context.Context, b *bot.Bot, chatID int64, messageID 
 }
 
 func (h *Handler) send(ctx context.Context, b *bot.Bot, chatID int64, text string) {
-	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text}); err != nil {
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID, Text: text, ParseMode: models.ParseModeHTML,
+	}); err != nil {
 		h.Log.Warn("sending a message", "error", err)
 	}
 }
@@ -478,8 +516,10 @@ func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *sessi
 	if renderErr != nil {
 		h.Log.Warn("rendering a diagnostic", "error", renderErr)
 		// Better a wall of text than nothing at all, but truncated: a generated file can produce
-		// hundreds of diagnostics and Telegram rejects a message over 4096 characters.
-		h.edit(ctx, b, s.ChatID, s.MessageID, summary+"\n\n"+firstLines(output, 25),
+		// hundreds of diagnostics and Telegram rejects a message over 4096 characters. code()
+		// both formats it as the compiler output it is and escapes it — a generic's "<T>" would
+		// otherwise be read as an HTML tag and vanish rather than show up as text.
+		h.edit(ctx, b, s.ChatID, s.MessageID, summary+"\n\n"+code(firstLines(output, 25)),
 			ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
@@ -502,14 +542,14 @@ func compileMessage(err error) (summary, output string) {
 	var failed *compile.Failed
 	switch {
 	case errors.Is(err, compile.ErrTimeout):
-		return "That took too long to compile.", ""
+		return fail + "That took too long to compile.", ""
 	case errors.As(err, &failed):
 		if failed.Output == "" {
-			return "The compiler produced neither classes nor a message.", ""
+			return fail + "The compiler produced neither classes nor a message.", ""
 		}
-		return "The compiler was not happy.", failed.Output
+		return fail + "The compiler was not happy.", failed.Output
 	default:
-		return "Something went wrong while compiling.", ""
+		return fail + "Something went wrong while compiling.", ""
 	}
 }
 

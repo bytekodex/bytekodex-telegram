@@ -110,10 +110,9 @@ func javaToolchain(lock *Lock) Toolchain {
 		if !ok {
 			continue
 		}
+		// The label stays just "JDK N": EarlyAccess already carries the fact for anything that
+		// wants to act on it, and spelling it out in every button and caption crowded both.
 		label := fmt.Sprintf("JDK %d", jdk.Major)
-		if jdk.ReleaseStatus == "ea" {
-			label += " (early access)"
-		}
 		releases = append(releases, Release{
 			ID:              fmt.Sprintf("java%d", jdk.Major),
 			Label:           label,

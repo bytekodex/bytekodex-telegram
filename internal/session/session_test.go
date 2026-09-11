@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestExpiredSessionIsGoneNotRevived(t *testing.T) {
 	if session := store.Get(7); session != nil {
 		t.Fatal("expired session was returned")
 	}
-	if session := store.Update(7, func(s *Session) { s.Page = 3 }); session != nil {
+	if session := store.Update(7, func(s *Session) { s.Target = "8" }); session != nil {
 		t.Error("expired session accepted an update")
 	}
 }
@@ -45,14 +46,15 @@ func TestUpdateRefreshesTheExpiry(t *testing.T) {
 	store := NewStore(50 * time.Millisecond)
 	store.Start(2, files(), detect.Guess{Language: detect.Java})
 
-	for range 5 {
+	for i := range 5 {
 		time.Sleep(20 * time.Millisecond)
-		if store.Update(2, func(s *Session) { s.Page++ }) == nil {
+		target := strconv.Itoa(i)
+		if store.Update(2, func(s *Session) { s.Target = target }) == nil {
 			t.Fatal("session expired while it was being used")
 		}
 	}
-	if session := store.Get(2); session == nil || session.Page != 5 {
-		t.Errorf("session = %+v, want page 5", session)
+	if session := store.Get(2); session == nil || session.Target != "4" {
+		t.Errorf("session = %+v, want target 4", session)
 	}
 }
 

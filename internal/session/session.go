@@ -34,7 +34,6 @@ type Session struct {
 	Target    string
 	View      render.View
 
-	Page      int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

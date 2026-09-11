@@ -57,8 +57,11 @@ func TestNewestJDKIsTheDefaultAndOrderIsNewestFirst(t *testing.T) {
 	if got := chain.DefaultRelease().ID; got != "java28" {
 		t.Errorf("default is %q, want java28", got)
 	}
-	if !strings.Contains(chain.Releases[0].Label, "early access") {
-		t.Errorf("an EA build should say so: %q", chain.Releases[0].Label)
+	if !chain.Releases[0].EarlyAccess {
+		t.Errorf("release %q should be marked early access", chain.Releases[0].Label)
+	}
+	if strings.Contains(chain.Releases[0].Label, "early access") {
+		t.Errorf("the label should stay just the version, not spell out early access: %q", chain.Releases[0].Label)
 	}
 }
 
