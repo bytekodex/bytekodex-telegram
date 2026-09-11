@@ -32,8 +32,10 @@ commands:
   probe     ask the built images what their compilers actually support
 
 flags:
-  -dir string   directory holding manifest.json and lock.json (default "toolchains")
-  -quiet        do not report progress while resolving
+  -dir string        directory holding manifest.json and lock.json (default "toolchains")
+  -quiet             do not report progress while resolving
+  -platform string   plan: restrict to one architecture (amd64 or arm64), skipping versions that
+                      have nothing resolved for it
 `
 
 func main() {
@@ -45,6 +47,7 @@ func main() {
 	flags := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
 	dir := flags.String("dir", "toolchains", "directory holding manifest.json and lock.json")
 	quiet := flags.Bool("quiet", false, "do not report progress while resolving")
+	platform := flags.String("platform", "", "restrict plan to one Docker architecture (amd64 or arm64); empty means every architecture the lock has")
 	flags.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	if err := flags.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
@@ -58,7 +61,7 @@ func main() {
 	case "resolve":
 		err = resolve(manifestPath, lockPath, *quiet)
 	case "plan":
-		err = plan(lockPath)
+		err = plan(lockPath, *platform)
 	case "show":
 		err = show(lockPath)
 	case "probe":
@@ -106,7 +109,13 @@ func resolve(manifestPath, lockPath string, quiet bool) error {
 
 // plan prints build commands rather than running them, so the same output serves a human piping
 // it to a shell and a CI job consuming it line by line. Nothing here shells out to docker.
-func plan(lockPath string) error {
+//
+// platform, when set, restricts every image to one architecture instead of the multi-arch build a
+// bare laptop would want. A production server only ever runs one architecture, and cross-building
+// the other one there means paying for QEMU emulation on every image, for an artifact nothing will
+// ever pull. A version with nothing resolved for the requested architecture — JDK 7 has no aarch64
+// build anywhere — is skipped rather than failing the whole plan.
+func plan(lockPath, platform string) error {
 	lock, err := toolchain.LoadLock(lockPath)
 	if err != nil {
 		return err
@@ -115,7 +124,13 @@ func plan(lockPath string) error {
 	// JDK images first: every compiler image is built on top of one.
 	for _, major := range lock.Majors() {
 		entries := lock.Architectures(major)
-		representative, _ := lock.Representative(major)
+		if platform != "" {
+			entries = filterArch(entries, platform)
+			if len(entries) == 0 {
+				continue
+			}
+		}
+		representative := entries[0]
 
 		// One image per version, carrying every architecture it was resolved for. The Dockerfile
 		// picks by TARGETARCH, so the same command works on an x64 server and an arm64 laptop, and
@@ -136,17 +151,32 @@ func plan(lockPath string) error {
 
 		// The system classes come out of the JDK image, so they are planned next to it.
 		fmt.Printf("docker build -f toolchains/Dockerfile.sysclasses -t %s \\\n", sysclassImage(major))
+		if platform != "" {
+			fmt.Printf("  --platform linux/%s \\\n", dockerArch(platform))
+		}
 		fmt.Printf("  --build-arg BASE=%s \\\n", representative.Image())
 		fmt.Printf("  toolchains\n")
 	}
 
 	for _, entry := range lock.Kotlin {
-		printToolBuild("kotlin", entry, lock)
+		printToolBuild("kotlin", entry, lock, platform)
 	}
 	for _, entry := range lock.Groovy {
-		printToolBuild("groovy", entry, lock)
+		printToolBuild("groovy", entry, lock, platform)
 	}
 	return nil
+}
+
+// filterArch keeps only the entries whose architecture matches, under whichever spelling was used
+// to resolve them.
+func filterArch(entries []toolchain.LockedJDK, platform string) []toolchain.LockedJDK {
+	var out []toolchain.LockedJDK
+	for _, entry := range entries {
+		if dockerArch(entry.Architecture) == dockerArch(platform) {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // dockerArch translates foojay's architecture names into Docker's.
@@ -165,13 +195,16 @@ func sysclassImage(major int) string {
 	return fmt.Sprintf("%s/sysclasses:%d", toolchain.ImagePrefix, major)
 }
 
-func printToolBuild(language string, tool toolchain.LockedTool, lock *toolchain.Lock) {
+func printToolBuild(language string, tool toolchain.LockedTool, lock *toolchain.Lock, platform string) {
 	base := ""
 	if representative, ok := lock.Representative(tool.JDK); ok {
 		base = representative.Image()
 	}
 
 	fmt.Printf("docker build -f toolchains/Dockerfile.%s -t %s \\\n", language, tool.Image(language))
+	if platform != "" {
+		fmt.Printf("  --platform linux/%s \\\n", dockerArch(platform))
+	}
 	fmt.Printf("  --build-arg BASE=%s \\\n", base)
 	fmt.Printf("  --build-arg URL=%s \\\n", tool.URL)
 	fmt.Printf("  --build-arg SHA256=%s \\\n", tool.SHA256)

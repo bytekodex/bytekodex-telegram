@@ -1,0 +1,50 @@
+# The bot image itself, built from two checkouts: this repo and bytekodex/bytekodex-platform.
+# It needs a docker CLI because it shells out to spawn the locked-down compiler containers
+# (network none, read-only, its own user) — it never runs code itself, only asks the host's
+# daemon to. That daemon is reached through /var/run/docker.sock, mounted in at deploy time.
+#
+#   docker build -f Dockerfile.bot -t ghcr.io/bytekodex/bot:TAG \
+#     --build-arg PLATFORM_REF=<platform commit sha> ..
+#
+# Build context is the superproject root, so both checkouts are visible as ./platform and
+# ./telegram.
+
+# --- the platform's C ABI, linked statically so the runtime image needs no .so alongside it ---
+FROM rust:1-slim-trixie AS platform
+WORKDIR /src
+COPY platform/ .
+RUN cargo build --release --locked -p bk-ffi
+
+# --- the bot binary, cgo against libbytekodex.a ---
+FROM golang:1.26-trixie AS gobuild
+WORKDIR /src
+COPY telegram/go.mod telegram/go.sum ./
+RUN go mod download
+COPY telegram/ .
+COPY --from=platform /src/target/release/libbytekodex.a /usr/local/lib/libbytekodex.a
+ENV CGO_ENABLED=1
+ENV CGO_LDFLAGS=-L/usr/local/lib
+RUN go build -trimpath -ldflags="-s -w" -o /out/bot ./cmd/bot
+
+# --- the docker CLI, from Docker's own minimal client-only image rather than a hand-verified
+# tarball: it is pulled the same way every FROM in this project already trusts its base image ---
+FROM docker:27-cli AS dockercli
+
+# --- runtime ---
+FROM debian:trixie-slim
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates fonts-firacode; \
+    rm -rf /var/lib/apt/lists/*; \
+    useradd --uid 1000 --create-home --shell /usr/sbin/nologin bot
+
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=gobuild /out/bot /usr/local/bin/bot
+
+# lock.json baked in as a fallback only. In production it is bind-mounted from the host instead,
+# so a new JDK version reaches the bot without rebuilding this image — see deploy/compose.yml.
+COPY telegram/toolchains/lock.json /opt/bytekodex/lock.json
+
+USER bot
+WORKDIR /home/bot
+ENTRYPOINT ["/usr/local/bin/bot"]

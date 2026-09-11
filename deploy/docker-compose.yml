@@ -1,0 +1,35 @@
+# Runs on the VPS itself, deployed by the self-hosted runner registered there — see
+# .github/workflows/bot.yml. Everything the bot needs at a fixed host path is bind-mounted at that
+# exact same path inside the container, on purpose: the bot spawns sibling compiler containers
+# through the host's own Docker socket, and the *host* daemon resolves the --volume paths it is
+# given, not the bot container's. A path that only exists inside the bot's own filesystem would
+# mount empty or fail on the host side.
+services:
+  bot:
+    image: ghcr.io/bytekodex/bot:${BOT_TAG:-latest}
+    container_name: bytekodex-bot
+    restart: unless-stopped
+    # The host's docker group GID, so the container's non-root user can reach the socket without
+    # being root. It is a build fact of this one VPS (`getent group docker`), not a secret.
+    group_add:
+      - "988"
+    environment:
+      BYTEKODEX_TELEGRAM_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      BYTEKODEX_CONTAINER_RUNTIME: docker
+      BYTEKODEX_TOOLCHAIN_LOCK: /opt/bytekodex/lock.json
+      BYTEKODEX_SYSCLASSES: /opt/bytekodex/sysclasses
+      BYTEKODEX_DEPS: /opt/bytekodex/deps
+      # os.MkdirTemp reads TMPDIR. Scratch directories land under the bind mount below rather than
+      # the container's own /tmp, so the path handed to `docker run -v` is one the host actually has.
+      TMPDIR: /opt/bytekodex/scratch
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/bytekodex/scratch:/opt/bytekodex/scratch
+      - /opt/bytekodex/deps:/opt/bytekodex/deps:ro
+      - /opt/bytekodex/sysclasses:/opt/bytekodex/sysclasses:ro
+      - /opt/bytekodex/lock.json:/opt/bytekodex/lock.json:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
