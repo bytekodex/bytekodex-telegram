@@ -34,13 +34,11 @@ jobs:
       # resolve spends most of on its own — see resolve.go for the early-access checksum problem
       # this avoids reintroducing.
       - name: Resolve every version in the manifest
-        working-directory: telegram
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: go run ./cmd/toolchainctl resolve
 
       - name: Commit the lock if resolving changed it
-        working-directory: telegram
         run: |
           if git diff --quiet toolchains/lock.json; then
             echo "lock unchanged"
@@ -58,18 +56,15 @@ jobs:
       # Builds and pushes only what the registry does not already have. A version's checksum is
       # fixed once resolved, so an existing tag is byte-for-byte what a rebuild would produce.
       - name: Build and push new toolchain images
-        working-directory: telegram
         run: ./toolchains/deploy.sh amd64
 
       - name: Extract system classes onto the host
-        working-directory: telegram
         run: ./toolchains/sync-sysclasses.sh /opt/bytekodex/sysclasses
 
       # The bot reads the lock from a bind mount, not from inside its own image, precisely so this
       # step is enough — no rebuild, no redeploy, a new version is just there the next time someone
       # opens the release picker.
       - name: Publish the lock where the bot reads it, and restart it to pick it up
-        working-directory: telegram
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
