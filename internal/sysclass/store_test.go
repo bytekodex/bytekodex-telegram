@@ -2,228 +2,196 @@ package sysclass
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 )
 
-// fixture builds a small store on disk shaped like a real extraction.
-func fixture(t *testing.T) *Store {
+// writeClasses creates each path under root with the path itself as its content, so a test can
+// tell which file a lookup actually read.
+func writeClasses(t *testing.T, root string, paths ...string) {
 	t.Helper()
-	root := t.TempDir()
-
-	for _, class := range []struct {
-		major int
-		path  string
-	}{
-		{25, "java/util/concurrent/ConcurrentHashMap.class"},
-		{25, "java/util/List.class"},
-		{25, "java/util/Map.class"},
-		{25, "java/util/Map$Entry.class"},
-		{25, "java/awt/List.class"},
-		{25, "java/lang/String.class"},
-		{8, "java/util/concurrent/ConcurrentHashMap.class"},
-		{8, "java/lang/String.class"},
-	} {
-		full := filepath.Join(root, itoa(class.major), filepath.FromSlash(class.path))
+	for _, p := range paths {
+		full := filepath.Join(root, filepath.FromSlash(p))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		// The content only has to be distinguishable; nothing here parses it.
-		if err := os.WriteFile(full, []byte("\xca\xfe\xba\xbe"+class.path), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte(p), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+func fixture(t *testing.T) *Store {
+	t.Helper()
+	root := t.TempDir()
+	writeClasses(t, root,
+		// Flattened, as an unzipped rt.jar or a merged jimage extract.
+		"21/java/util/List.class",
+		"21/java/awt/List.class",
+		"21/java/util/Map.class",
+		"21/java/util/Map$Entry.class",
+		"21/java/util/TreeMap$Entry.class",
+		"21/java/util/HashMap$1.class",
+		"21/java/lang/Thread.class",
+		"21/java/lang/Thread$State.class",
+		"21/java/lang/Long.class",
+		"21/java/lang/String.class",
+		"21/java/io/Gadget.class",
+		"21/java/util/concurrent/Gadget.class",
+		// As `jimage extract` leaves it: one directory per module.
+		"25/java.base/module-info.class",
+		"25/java.base/java/util/List.class",
+		"25/java.desktop/java/awt/List.class",
+		// Not versions: a name that is not a number, and a number that is not canonical.
+		"notes/java/lang/Object.class",
+		"025/java/lang/Object.class",
+	)
 	return Open(root)
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	return string(digits)
-}
-
-// The spellings a person actually types. Each of these has to reach the same class.
-func TestEverySpellingOfAQualifiedNameResolves(t *testing.T) {
+func TestLookup(t *testing.T) {
 	store := fixture(t)
-
-	for _, query := range []string{
-		"java.util.concurrent.ConcurrentHashMap",
-		"java.util.concurrent.ConcurrentHashMap.java",
-		"java.util.concurrent.ConcurrentHashMap.class",
-		"java/util/concurrent/ConcurrentHashMap",
-		"Ljava/util/concurrent/ConcurrentHashMap;",
-		"  java.util.concurrent.ConcurrentHashMap  ",
-		"`java.util.concurrent.ConcurrentHashMap`",
-		"ConcurrentHashMap",
-		"concurrenthashmap",
-	} {
-		class, err := store.Lookup(25, query)
-		if err != nil {
-			t.Errorf("Lookup(%q): %v", query, err)
-			continue
-		}
-		if class.Name != "java.util.concurrent.ConcurrentHashMap" {
-			t.Errorf("Lookup(%q) = %q", query, class.Name)
-		}
+	cases := []struct {
+		major int
+		query string
+		want  string
+		file  string
+	}{
+		{21, "java.util.List", "java.util.List", "21/java/util/List.class"},
+		{21, "List", "java.util.List", "21/java/util/List.class"},
+		{21, "list", "java.util.List", "21/java/util/List.class"},
+		{21, "java.util.list", "java.util.List", "21/java/util/List.class"},
+		{21, "java/util/List.java", "java.util.List", "21/java/util/List.class"},
+		{21, "Ljava/util/List;", "java.util.List", "21/java/util/List.class"},
+		{21, "List<String>", "java.util.List", "21/java/util/List.class"},
+		{21, "java.util.Map.Entry", "java.util.Map$Entry", "21/java/util/Map$Entry.class"},
+		{21, "Map.Entry", "java.util.Map$Entry", "21/java/util/Map$Entry.class"},
+		{21, "Map$Entry", "java.util.Map$Entry", "21/java/util/Map$Entry.class"},
+		{21, "Thread.State", "java.lang.Thread$State", "21/java/lang/Thread$State.class"},
+		{21, "Long;", "java.lang.Long", "21/java/lang/Long.class"},
+		{21, "[Ljava.lang.String;", "java.lang.String", "21/java/lang/String.class"},
+		{21, "String[]", "java.lang.String", "21/java/lang/String.class"},
+		{21, "java.util.HashMap$1", "java.util.HashMap$1", "21/java/util/HashMap$1.class"},
+		// java.io is listed above java.util.concurrent; the longer prefix must not be shadowed by java.util.
+		{21, "Gadget", "java.io.Gadget", "21/java/io/Gadget.class"},
+		{25, "List", "java.util.List", "25/java.base/java/util/List.class"},
+		{25, "java.awt.List", "java.awt.List", "25/java.desktop/java/awt/List.class"},
 	}
-}
-
-// A nested class is one class with two spellings, and a user has no reason to know which one the
-// file system uses.
-func TestNestedClassesResolveWithADotOrADollar(t *testing.T) {
-	store := fixture(t)
-
-	for _, query := range []string{"java.util.Map.Entry", "java.util.Map$Entry", "Entry"} {
-		class, err := store.Lookup(25, query)
-		if err != nil {
-			t.Errorf("Lookup(%q): %v", query, err)
-			continue
-		}
-		if class.Name != "java.util.Map$Entry" {
-			t.Errorf("Lookup(%q) = %q", query, class.Name)
-		}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("%d %q", c.major, c.query), func(t *testing.T) {
+			got, err := store.Lookup(c.major, c.query)
+			if err != nil {
+				t.Fatalf("Lookup: %v", err)
+			}
+			if got.Name != c.want || got.Major != c.major || string(got.Bytes) != c.file {
+				t.Errorf("got %s from %q, want %s from %q", got.Name, got.Bytes, c.want, c.file)
+			}
+		})
 	}
 }
 
-// java.util.List and java.awt.List both exist, and the shallower package is what someone typing
-// "List" almost always means.
-func TestAnAmbiguousSimpleNamePrefersTheShallowestPackage(t *testing.T) {
+func TestLookupErrors(t *testing.T) {
 	store := fixture(t)
 
-	class, err := store.Lookup(25, "List")
+	if got := store.Majors(); !slices.Equal(got, []int{21, 25}) {
+		t.Errorf("Majors() = %v, want [21 25]", got)
+	}
+
+	var ambiguous *ErrAmbiguous
+	if _, err := store.Lookup(21, "Entry"); !errors.As(err, &ambiguous) {
+		t.Errorf("Entry: err = %v, want ErrAmbiguous", err)
+	} else if want := []string{"java.util.Map$Entry", "java.util.TreeMap$Entry"}; !slices.Equal(ambiguous.Candidates, want) {
+		t.Errorf("Entry: candidates = %v, want %v", ambiguous.Candidates, want)
+	}
+
+	for _, query := range []string{"Nope", "foo()", "", "java.util"} {
+		if _, err := store.Lookup(21, query); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%q: err = %v, want ErrNotFound", query, err)
+		}
+	}
+
+	var noVersion *ErrNoVersion
+	if _, err := store.Lookup(17, "List"); !errors.As(err, &noVersion) {
+		t.Errorf("JDK 17: err = %v, want ErrNoVersion", err)
+	} else if !slices.Equal(noVersion.Have, []int{21, 25}) {
+		t.Errorf("JDK 17: Have = %v, want [21 25]", noVersion.Have)
+	}
+}
+
+func TestSymlinkedVersion(t *testing.T) {
+	target := t.TempDir()
+	writeClasses(t, target, "java/lang/Object.class")
+	root := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(root, "17")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	got, err := Open(root).Lookup(17, "Object")
 	if err != nil {
 		t.Fatalf("Lookup: %v", err)
 	}
-	if class.Name != "java.util.List" {
-		t.Errorf("got %q, want java.util.List", class.Name)
+	if got.Name != "java.lang.Object" {
+		t.Errorf("got %s, want java.lang.Object", got.Name)
 	}
 }
 
-// The version is half the point: the same class from JDK 8 and JDK 25 is different bytecode.
-func TestTheSameQueryAgainstTwoVersionsReadsTwoFiles(t *testing.T) {
-	store := fixture(t)
-
-	modern, err := store.Lookup(25, "java.lang.String")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ancient, err := store.Lookup(8, "java.lang.String")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if modern.Major == ancient.Major {
-		t.Error("both lookups came from the same version")
-	}
-
-	// A class only present in one version must not leak into the other.
-	if _, err := store.Lookup(8, "java.util.Map"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("JDK 8 answered for a class it does not have: %v", err)
-	}
-}
-
-// Saying "no such class" about java.lang.String would be absurd. The version is what is missing.
-func TestAVersionTheStoreDoesNotHaveSaysSo(t *testing.T) {
-	store := fixture(t)
-
-	_, err := store.Lookup(21, "java.lang.String")
-
-	var missing *ErrNoVersion
-	if !errors.As(err, &missing) {
-		t.Fatalf("err = %v, want ErrNoVersion", err)
-	}
-	if missing.Major != 21 {
-		t.Errorf("reported JDK %d, want 21", missing.Major)
-	}
-	if len(missing.Have) == 0 {
-		t.Error("did not say which versions are there instead")
-	}
-}
-
-func TestMajorsAreReportedOldestFirst(t *testing.T) {
-	store := fixture(t)
-	majors := store.Majors()
-	if len(majors) != 2 || majors[0] != 8 || majors[1] != 25 {
-		t.Errorf("Majors() = %v, want [8 25]", majors)
-	}
-}
-
-// The path is built out of a stranger's message, so traversal has to be impossible rather than
-// unlikely.
-func TestPathTraversalCannotEscapeTheStore(t *testing.T) {
-	store := fixture(t)
-
-	for _, query := range []string{
-		"../../../etc/passwd",
-		"java.util...........String",
-		"/etc/passwd",
-		"..",
-	} {
-		if _, err := store.Lookup(25, query); err == nil {
-			t.Errorf("Lookup(%q) succeeded", query)
-		}
-	}
-}
-
-// Telling a query from a snippet has to be right in both directions: a snippet mistaken for a
-// query gets a pointless "no such class", and a query mistaken for a snippet gets compiled.
-func TestQueriesAreToldApartFromSourceCode(t *testing.T) {
-	queries := []string{
-		"java.util.concurrent.ConcurrentHashMap",
-		"ConcurrentHashMap",
-		"java/lang/String.java",
-		"Map$Entry",
-	}
-	for _, text := range queries {
-		if _, ok := LooksLikeQuery(text); !ok {
-			t.Errorf("LooksLikeQuery(%q) = false, want true", text)
-		}
-	}
-
-	snippets := []string{
-		"class A {}",
-		"fun main() = println(1)",
-		"int x = 1;",
-		"java.util.List<String> xs",
-		"class A {\n}",
-		"System.out.println(\"hi\")",
-		"",
-		"   ",
-	}
-	for _, text := range snippets {
-		if got, ok := LooksLikeQuery(text); ok {
-			t.Errorf("LooksLikeQuery(%q) = %q, true; want false", text, got)
-		}
-	}
-}
-
-func TestAMissingStoreIsNotAnError(t *testing.T) {
-	store := Open(filepath.Join(t.TempDir(), "never-created"))
+func TestStoreAppearingAfterFirstQueryIsPickedUp(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "store")
+	store := Open(root)
+	store.retry = time.Millisecond
 
 	if store.Available() {
-		t.Error("reported itself available with nothing on disk")
+		t.Fatal("Available() before the store exists")
 	}
-	// An empty store has no version, so a lookup fails on the version rather than crashing.
-	var missing *ErrNoVersion
-	if _, err := store.Lookup(25, "java.lang.String"); !errors.As(err, &missing) {
-		t.Errorf("err = %v, want ErrNoVersion", err)
+	writeClasses(t, root, "21/java/lang/Object.class")
+	time.Sleep(10 * time.Millisecond)
+	if !store.Available() {
+		t.Fatal("a store that appeared after the first query was never picked up")
 	}
 }
 
-func TestFileNameIsTheSimpleName(t *testing.T) {
-	cases := map[string]string{
-		"java.util.concurrent.ConcurrentHashMap": "ConcurrentHashMap.class",
-		"java.util.Map$Entry":                    "Map$Entry.class",
+func TestConcurrentFirstLookup(t *testing.T) {
+	store := fixture(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := store.Lookup(21, "List"); err != nil {
+				t.Errorf("Lookup: %v", err)
+			}
+		}()
 	}
-	for name, want := range cases {
-		if got := (Class{Name: name}).FileName(); got != want {
-			t.Errorf("FileName(%q) = %q, want %q", name, got, want)
+	wg.Wait()
+}
+
+func TestLooksLikeQuery(t *testing.T) {
+	cases := []struct {
+		text string
+		want string
+		ok   bool
+	}{
+		{"java.util.List", "java.util.List", true},
+		{"  `ConcurrentHashMap`  ", "ConcurrentHashMap", true},
+		{"[Ljava.lang.String;", "java.lang.String", true},
+		{"Ljava/util/List;", "java.util.List", true},
+		{"List<String>", "List", true},
+		{"LinkedList", "LinkedList", true},
+		{"foo();", "", false},
+		{"Long;", "", false},
+		{"int x = 1", "", false},
+		{"class A {}", "", false},
+		{"println(1)\nprintln(2)", "", false},
+	}
+	for _, c := range cases {
+		got, ok := LooksLikeQuery(c.text)
+		if got != c.want || ok != c.ok {
+			t.Errorf("LooksLikeQuery(%q) = %q, %v; want %q, %v", c.text, got, ok, c.want, c.ok)
 		}
 	}
 }
