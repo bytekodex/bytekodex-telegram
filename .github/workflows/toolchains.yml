@@ -61,6 +61,9 @@ jobs:
       - name: Extract system classes onto the host
         run: ./toolchains/sync-sysclasses.sh /opt/bytekodex/sysclasses
 
+      - name: Seed the Kotlin classpath jars onto the host
+        run: ./toolchains/sync-deps.sh /opt/bytekodex/deps
+
       # The bot reads the lock from a bind mount, not from inside its own image, precisely so this
       # step is enough — no rebuild, no redeploy, a new version is just there the next time someone
       # opens the release picker.

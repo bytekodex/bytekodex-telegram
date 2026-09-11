@@ -59,6 +59,12 @@ jobs:
           docker push ghcr.io/bytekodex/bot:${{ github.sha }}
           docker push ghcr.io/bytekodex/bot:latest
 
+      # Idempotent and cheap (a sha1 check, most runs), and belongs here too: a box that has only
+      # ever run this workflow should still have a bot that can compile Kotlin.
+      - name: Seed the Kotlin classpath jars onto the host
+        working-directory: telegram
+        run: ./toolchains/sync-deps.sh /opt/bytekodex/deps
+
       # Runs on the same machine the container ends up on, so this is the whole deploy: no SSH,
       # no separate agent, no polling for a new digest. BOT_TAG pins the exact commit that was
       # just built, rather than trusting whatever `latest` happens to resolve to a moment later.
