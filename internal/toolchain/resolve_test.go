@@ -2,6 +2,8 @@ package toolchain
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,13 @@ import (
 	"strings"
 	"testing"
 )
+
+// sha1Hex is what a test fixture's sidecar has to match — computed the same way the resolver
+// itself computes it, so a fixture bug and a real corrupted download are told apart.
+func sha1Hex(s string) string {
+	sum := sha1.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
 
 // fakeHosts stands in for foojay and the GitHub API so the resolver can be exercised without a
 // network. The download URLs it hands out point at the same server, which is why GitHubHost is
@@ -244,6 +253,66 @@ func TestAnArchiveWithNoPublishedChecksumIsHashed(t *testing.T) {
 	}
 	if hosts.hits["download"] == 0 {
 		t.Error("never fetched the archive it had to hash")
+	}
+}
+
+// A Kotlin version with a coroutines pin gets both classpath jars resolved and checked against
+// Maven Central's own .sha1 sidecar — the one thing here that is never a guess.
+func TestKotlinDepsAreResolvedAndVerifiedAgainstMavenCentral(t *testing.T) {
+	mux := http.NewServeMux()
+	const jar = "pretend this is a jar"
+	// The sidecar has to be the real sha1 of what the jar endpoint serves, or the resolver would
+	// reject its own fixture the same way it is meant to reject a corrupted download.
+	sum := sha1Hex(jar)
+	mux.HandleFunc("/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.4.20/kotlin-stdlib-2.4.20.jar.sha1",
+		func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, sum) })
+	mux.HandleFunc("/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.4.20/kotlin-stdlib-2.4.20.jar",
+		func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, jar) })
+	mux.HandleFunc("/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.11.0/kotlinx-coroutines-core-jvm-1.11.0.jar.sha1",
+		func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, sum) })
+	mux.HandleFunc("/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.11.0/kotlinx-coroutines-core-jvm-1.11.0.jar",
+		func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, jar) })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	previous := MavenCentral
+	MavenCentral = server.URL + "/maven2"
+	t.Cleanup(func() { MavenCentral = previous })
+
+	dep, err := testResolver().resolveMavenJar(context.Background(), "org/jetbrains/kotlin", "kotlin-stdlib", "2.4.20", "kotlin-stdlib.jar")
+	if err != nil {
+		t.Fatalf("resolveMavenJar: %v", err)
+	}
+	if len(dep.SHA256) != 64 {
+		t.Errorf("sha256 = %q, want a computed digest", dep.SHA256)
+	}
+
+	coroutines, err := testResolver().resolveCoroutines(context.Background(), "1.11.0")
+	if err != nil {
+		t.Fatalf("resolveCoroutines: %v", err)
+	}
+	if coroutines.Name != "kotlinx-coroutines-core-jvm.jar" {
+		t.Errorf("name = %q", coroutines.Name)
+	}
+}
+
+// A jar whose bytes do not match the sidecar Maven Central published for it must never be
+// trusted, the same as a republished JDK archive with a stale foojay checksum.
+func TestAMavenJarThatDoesNotMatchItsSidecarIsRejected(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.0.0/kotlin-stdlib-1.0.0.jar.sha1",
+		func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, strings.Repeat("a", 40)) })
+	mux.HandleFunc("/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.0.0/kotlin-stdlib-1.0.0.jar",
+		func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "not what the sidecar expects") })
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	previous := MavenCentral
+	MavenCentral = server.URL + "/maven2"
+	t.Cleanup(func() { MavenCentral = previous })
+
+	if _, err := testResolver().resolveMavenJar(context.Background(), "org/jetbrains/kotlin", "kotlin-stdlib", "1.0.0", "kotlin-stdlib.jar"); err == nil {
+		t.Error("accepted a jar that does not match its own sidecar")
 	}
 }
 

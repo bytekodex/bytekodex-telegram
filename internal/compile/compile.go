@@ -84,7 +84,7 @@ type Container struct {
 	// Runtime is the command used, "docker" or "podman".
 	Runtime string
 	Limits  Limits
-	// DepsVolume holds the jars in Toolchain.Classpath, mounted read-only. Kotlin needs
+	// DepsVolume holds the jars in Release.Classpath, mounted read-only. Kotlin needs
 	// coroutines on the classpath or most interesting snippets do not compile at all.
 	DepsVolume string
 }
@@ -137,7 +137,7 @@ func (c *Container) Compile(
 	// directory that is not there is not fatal, but every compile then carries a warning about it,
 	// and that warning would be shown to whoever sent the snippet.
 	if c.DepsVolume != "" {
-		if classpath := chain.ClasspathArg(depsDir); classpath != "" {
+		if classpath := release.ClasspathArg(depsDir); classpath != "" {
 			command = append(command[:1:1], append([]string{"-cp", classpath}, command[1:]...)...)
 		}
 	}

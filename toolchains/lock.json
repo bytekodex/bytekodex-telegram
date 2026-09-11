@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-11T13:13:29Z",
+  "generated_at": "2026-09-11T16:10:27Z",
   "jdk": [
     {
       "major": 7,
@@ -569,84 +569,228 @@
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.2.71/kotlin-compiler-1.2.71.zip",
       "sha256": "e48292fdfed42f44230bc01f92ffd17002101d8c5aeedfa3dba3cb29c5b6ea7b",
       "jvm_target_max": "1.8",
-      "jdk": 8
+      "jdk": 8,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.2.71/kotlin-stdlib-1.2.71.jar",
+          "sha256": "4c895c270b87f5fec2a2796e1d89c15407ee821de961527c28588bb46afbc68b"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core/0.30.2/kotlinx-coroutines-core-0.30.2.jar",
+          "sha256": "58d7be853d113ecee16b5ff4ec84ee59a9095a98b3331e1c2eb6308d1dd5fb16"
+        }
+      ]
     },
     {
       "version": "1.3.72",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.3.72/kotlin-compiler-1.3.72.zip",
       "sha256": "ccd0db87981f1c0e3f209a1a4acb6778f14e63fe3e561a98948b5317e526cc6c",
       "jvm_target_max": "1.8",
-      "jdk": 8
+      "jdk": 8,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.3.72/kotlin-stdlib-1.3.72.jar",
+          "sha256": "3856a7349ebacd6d1be6802b2fed9c4dc2c5a564ea92b6b945ac988243d4b16b"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core/1.3.8/kotlinx-coroutines-core-1.3.8.jar",
+          "sha256": "f8c8b7485d4a575e38e5e94945539d1d4eccd3228a199e1a9aa094e8c26174ee"
+        }
+      ]
     },
     {
       "version": "1.4.32",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.4.32/kotlin-compiler-1.4.32.zip",
       "sha256": "dfef23bb86bd5f36166d4ec1267c8de53b3827c446d54e82322c6b6daad3594c",
       "jvm_target_max": "14",
-      "jdk": 11
+      "jdk": 11,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.4.32/kotlin-stdlib-1.4.32.jar",
+          "sha256": "13e9fd3e69dc7230ce0fc873a92a4e5d521d179bcf1bef75a6705baac3bfecba"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.4.3/kotlinx-coroutines-core-jvm-1.4.3.jar",
+          "sha256": "f7be08ddf86bd88020da7b78adbf44228799cca54d5c0c4396d850bc66725163"
+        }
+      ]
     },
     {
       "version": "1.5.32",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.5.32/kotlin-compiler-1.5.32.zip",
       "sha256": "2e728c43ee0bf819eae06630a4cbbc28ba2ed5b19a55ee0af96d2c0ab6b6c2a5",
       "jvm_target_max": "16",
-      "jdk": 17
+      "jdk": 17,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.5.32/kotlin-stdlib-1.5.32.jar",
+          "sha256": "452d205f54a1f08673de273cb3d0148fbf9cd95275e5b0068fa1b001f48aee0a"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.5.2/kotlinx-coroutines-core-jvm-1.5.2.jar",
+          "sha256": "2314c48aa1a39c05c11f3b385cdf3c56b1745f064314e4feabecebc1572b3ac1"
+        }
+      ]
     },
     {
       "version": "1.6.21",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.6.21/kotlin-compiler-1.6.21.zip",
       "sha256": "632166fed89f3f430482f5aa07f2e20b923b72ef688c8f5a7df3aa1502c6d8ba",
       "jvm_target_max": "17",
-      "jdk": 17
+      "jdk": 17,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.6.21/kotlin-stdlib-1.6.21.jar",
+          "sha256": "739c526672bb337573b28f63afa8306eb088b0c3a0967f56d6c89f4a3012a492"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.6.4/kotlinx-coroutines-core-jvm-1.6.4.jar",
+          "sha256": "c24c8bb27bb320c4a93871501a7e5e0c61607638907b197aef675513d4c820be"
+        }
+      ]
     },
     {
       "version": "1.7.22",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.7.22/kotlin-compiler-1.7.22.zip",
       "sha256": "9db4b467743c1aea8a21c08e1c286bc2aeb93f14c7ba2037dbd8f48adc357d83",
       "jvm_target_max": "18",
-      "jdk": 17
+      "jdk": 17,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.7.22/kotlin-stdlib-1.7.22.jar",
+          "sha256": "f98505f50a6a1c1dc002d6102e4b419af93d011d5a10696e75a38935a96ea92f"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.6.4/kotlinx-coroutines-core-jvm-1.6.4.jar",
+          "sha256": "c24c8bb27bb320c4a93871501a7e5e0c61607638907b197aef675513d4c820be"
+        }
+      ]
     },
     {
       "version": "1.8.22",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.8.22/kotlin-compiler-1.8.22.zip",
       "sha256": "91f50fe25c9edfb1e79ae1fe2ede85fa4728f7f4b0587644a4eee40252cdfaa6",
       "jvm_target_max": "20",
-      "jdk": 17
+      "jdk": 17,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.8.22/kotlin-stdlib-1.8.22.jar",
+          "sha256": "03a5c3965cc37051128e64e46748e394b6bd4c97fa81c6de6fc72bfd44e3421b"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.6.4/kotlinx-coroutines-core-jvm-1.6.4.jar",
+          "sha256": "c24c8bb27bb320c4a93871501a7e5e0c61607638907b197aef675513d4c820be"
+        }
+      ]
     },
     {
       "version": "1.9.25",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v1.9.25/kotlin-compiler-1.9.25.zip",
       "sha256": "6ab72d6144e71cbbc380b770c2ad380972548c63ab6ed4c79f11c88f2967332e",
       "jvm_target_max": "21",
-      "jdk": 21
+      "jdk": 21,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/1.9.25/kotlin-stdlib-1.9.25.jar",
+          "sha256": "f9cdcdbff1f5de85380ae526977e683726c2aa42db1ed6e6e50ae89e496e95fd"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.8.1/kotlinx-coroutines-core-jvm-1.8.1.jar",
+          "sha256": "f3d4f5de1c391bbcc20f3b3435ccbac013521e76b6902d7d59635ec15c1f797e"
+        }
+      ]
     },
     {
       "version": "2.0.21",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip",
       "sha256": "0352c0a45bd22f80f6b26e485cd04da8047baa5de54865281fb9f89a4a7bcf2a",
       "jvm_target_max": "22",
-      "jdk": 21
+      "jdk": 21,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.0.21/kotlin-stdlib-2.0.21.jar",
+          "sha256": "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.9.0/kotlinx-coroutines-core-jvm-1.9.0.jar",
+          "sha256": "ad89c2892235e670f222d819cb3d81188143cb19a05b59df9889ae4269f5c70a"
+        }
+      ]
     },
     {
       "version": "2.1.21",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v2.1.21/kotlin-compiler-2.1.21.zip",
       "sha256": "1ba08a8b45da99339a0601134cc037b54cf85e9bc0edbe76dcbd27c2d684a977",
       "jvm_target_max": "23",
-      "jdk": 21
+      "jdk": 21,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.1.21/kotlin-stdlib-2.1.21.jar",
+          "sha256": "263bdc679e1f62012db7b091796279b6d71cf36f4797a98ff1ace05835f201c8"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.10.2/kotlinx-coroutines-core-jvm-1.10.2.jar",
+          "sha256": "5ca175b38df331fd64155b35cd8cae1251fa9ee369709b36d42e0a288ccce3fd"
+        }
+      ]
     },
     {
       "version": "2.2.21",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v2.2.21/kotlin-compiler-2.2.21.zip",
       "sha256": "a623871f1cd9c938946948b70ef9170879f0758043885bbd30c32f024e511714",
       "jvm_target_max": "24",
-      "jdk": 25
+      "jdk": 25,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.2.21/kotlin-stdlib-2.2.21.jar",
+          "sha256": "6558a3d233da56a20934b32159f9db5f86ed5816ef098f78a2c223dc6abb79dd"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.11.0/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "sha256": "d1d75aa01dffbb4d1c520e67e4c4e7f5f6174718e7cb4632412503f2f0e604fa"
+        }
+      ]
     },
     {
       "version": "2.3.21",
       "url": "https://github.com/JetBrains/kotlin/releases/download/v2.3.21/kotlin-compiler-2.3.21.zip",
       "sha256": "a8cfc1d62cd4d0de4d04f42575e40135bd620588c17d568a20eb9c7c259af14f",
       "jvm_target_max": "25",
-      "jdk": 25
+      "jdk": 25,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.3.21/kotlin-stdlib-2.3.21.jar",
+          "sha256": "6f64eac736db9434dd6925b4a518b9d1d17177652320c37916cf9ba3ce7d7d7a"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.11.0/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "sha256": "d1d75aa01dffbb4d1c520e67e4c4e7f5f6174718e7cb4632412503f2f0e604fa"
+        }
+      ]
     },
     {
       "version": "2.4.20",
@@ -654,7 +798,19 @@
       "sha256": "59e9ca74c7904ef2c122b12114937673ccce68de820a663f0ed66ccf8799e0b7",
       "jvm_target_max": "25",
       "jdk": 25,
-      "default": true
+      "default": true,
+      "deps": [
+        {
+          "name": "kotlin-stdlib.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/2.4.20/kotlin-stdlib-2.4.20.jar",
+          "sha256": "2226de463d309d4a5500a481320b3dea515a6981dcae1def531fbc158884e25f"
+        },
+        {
+          "name": "kotlinx-coroutines-core-jvm.jar",
+          "url": "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.11.0/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "sha256": "d1d75aa01dffbb4d1c520e67e4c4e7f5f6174718e7cb4632412503f2f0e604fa"
+        }
+      ]
     }
   ],
   "groovy": [

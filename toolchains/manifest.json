@@ -59,19 +59,19 @@
   },
   "kotlin": {
     "versions": [
-      { "version": "1.2.71", "jvm_target_max": "1.8", "jdk": 8 },
-      { "version": "1.3.72", "jvm_target_max": "1.8", "jdk": 8 },
-      { "version": "1.4.32", "jvm_target_max": "14", "jdk": 11 },
-      { "version": "1.5.32", "jvm_target_max": "16", "jdk": 17 },
-      { "version": "1.6.21", "jvm_target_max": "17", "jdk": 17 },
-      { "version": "1.7.22", "jvm_target_max": "18", "jdk": 17 },
-      { "version": "1.8.22", "jvm_target_max": "20", "jdk": 17 },
-      { "version": "1.9.25", "jvm_target_max": "21", "jdk": 21 },
-      { "version": "2.0.21", "jvm_target_max": "22", "jdk": 21 },
-      { "version": "2.1.21", "jvm_target_max": "23", "jdk": 21 },
-      { "version": "2.2.21", "jvm_target_max": "24", "jdk": 25 },
-      { "version": "2.3.21", "jvm_target_max": "25", "jdk": 25 },
-      { "version": "2.4.20", "jvm_target_max": "25", "jdk": 25, "default": true }
+      { "version": "1.2.71", "jvm_target_max": "1.8", "jdk": 8, "coroutines": "0.30.2" },
+      { "version": "1.3.72", "jvm_target_max": "1.8", "jdk": 8, "coroutines": "1.3.8" },
+      { "version": "1.4.32", "jvm_target_max": "14", "jdk": 11, "coroutines": "1.4.3" },
+      { "version": "1.5.32", "jvm_target_max": "16", "jdk": 17, "coroutines": "1.5.2" },
+      { "version": "1.6.21", "jvm_target_max": "17", "jdk": 17, "coroutines": "1.6.4" },
+      { "version": "1.7.22", "jvm_target_max": "18", "jdk": 17, "coroutines": "1.6.4" },
+      { "version": "1.8.22", "jvm_target_max": "20", "jdk": 17, "coroutines": "1.6.4" },
+      { "version": "1.9.25", "jvm_target_max": "21", "jdk": 21, "coroutines": "1.8.1" },
+      { "version": "2.0.21", "jvm_target_max": "22", "jdk": 21, "coroutines": "1.9.0" },
+      { "version": "2.1.21", "jvm_target_max": "23", "jdk": 21, "coroutines": "1.10.2" },
+      { "version": "2.2.21", "jvm_target_max": "24", "jdk": 25, "coroutines": "1.11.0" },
+      { "version": "2.3.21", "jvm_target_max": "25", "jdk": 25, "coroutines": "1.11.0" },
+      { "version": "2.4.20", "jvm_target_max": "25", "jdk": 25, "default": true, "coroutines": "1.11.0" }
     ]
   },
   "groovy": {

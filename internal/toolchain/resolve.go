@@ -2,15 +2,18 @@ package toolchain
 
 import (
 	"context"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,7 +64,7 @@ func (r *Resolver) Resolve(ctx context.Context, manifest *Manifest) (*Lock, erro
 		if err != nil {
 			return nil, err
 		}
-		r.Log("kotlin %s", resolved.Version)
+		r.Log("kotlin %s (classpath: coroutines %s)", resolved.Version, request.Coroutines)
 		lock.Kotlin = append(lock.Kotlin, *resolved)
 	}
 
@@ -258,14 +261,144 @@ func (r *Resolver) resolveKotlinFrom(ctx context.Context, request VersionRequest
 		}
 	}
 
-	return &LockedTool{
+	tool := &LockedTool{
 		Version:      request.Version,
 		URL:          base + archive,
 		SHA256:       sum,
 		JVMTargetMax: request.JVMTargetMax,
 		JDK:          request.JDK,
 		Default:      request.Default,
-	}, nil
+	}
+
+	if request.Coroutines != "" {
+		stdlib, err := r.resolveMavenJar(ctx, "org/jetbrains/kotlin", "kotlin-stdlib", request.Version, "kotlin-stdlib.jar")
+		if err != nil {
+			return nil, fmt.Errorf("toolchain: kotlin %s: stdlib: %w", request.Version, err)
+		}
+		// Maven Central rate-limits by request rate, not by artifact: two requests back to back for
+		// every one of a dozen-plus Kotlin versions reads as a burst, even though each version on
+		// its own is one request every few minutes. This pacing sleep is what a human clicking
+		// through the same downloads one at a time would produce for free.
+		r.pace(ctx)
+		coroutines, err := r.resolveCoroutines(ctx, request.Coroutines)
+		if err != nil {
+			return nil, fmt.Errorf("toolchain: kotlin %s: coroutines: %w", request.Version, err)
+		}
+		tool.Deps = []LockedDependency{*stdlib, *coroutines}
+	}
+
+	return tool, nil
+}
+
+/* ---------- Kotlin's classpath jars, via Maven Central ---------- */
+
+// MavenCentral is a variable rather than a constant so a test can point it at a server it
+// controls, the same way FoojayAPI and GitHubAPI are.
+var MavenCentral = "https://repo1.maven.org/maven2"
+
+// resolveCoroutines locates kotlinx-coroutines-core-jvm, falling back to the plain
+// kotlinx-coroutines-core artifact: the "-jvm" classifier is a multiplatform-era convention that
+// releases before roughly 1.4 never published under, and 0.30.2 and 1.3.8 in the manifest predate it.
+func (r *Resolver) resolveCoroutines(ctx context.Context, version string) (*LockedDependency, error) {
+	dep, err := r.resolveMavenJar(ctx, "org/jetbrains/kotlinx", "kotlinx-coroutines-core-jvm", version, "kotlinx-coroutines-core-jvm.jar")
+	if err == nil {
+		return dep, nil
+	}
+	if !errors.Is(err, errMavenNotFound) {
+		return nil, err
+	}
+	return r.resolveMavenJar(ctx, "org/jetbrains/kotlinx", "kotlinx-coroutines-core", version, "kotlinx-coroutines-core-jvm.jar")
+}
+
+// errMavenNotFound distinguishes "this artifact id does not exist at this version", which
+// resolveCoroutines falls back from, from every other kind of failure.
+var errMavenNotFound = errors.New("not found on Maven Central")
+
+// resolveMavenJar downloads a jar exactly once, hashing it to sha256 for the lock while checking
+// what came down against the .sha1 sidecar Maven Central itself publishes next to every artifact —
+// the artifact's own repository is the one thing here that is never a guess.
+func (r *Resolver) resolveMavenJar(ctx context.Context, groupPath, artifact, version, outName string) (*LockedDependency, error) {
+	base := fmt.Sprintf("%s/%s/%s/%s/%s-%s", MavenCentral, groupPath, artifact, version, artifact, version)
+	jarURL := base + ".jar"
+
+	published, err := r.fetchSHA1(ctx, jarURL+".sha1")
+	if err != nil {
+		return nil, err
+	}
+	if published == "" {
+		return nil, fmt.Errorf("%w: %s", errMavenNotFound, jarURL)
+	}
+
+	r.pace(ctx)
+	sha256sum, sha1sum, err := r.hashRemoteBoth(ctx, jarURL)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(sha1sum, published) {
+		return nil, fmt.Errorf("%s: sha1 %s does not match the sidecar %s", jarURL, sha1sum, published)
+	}
+
+	return &LockedDependency{Name: outName, URL: jarURL, SHA256: sha256sum}, nil
+}
+
+// fetchSHA1 reads a .sha1 sidecar, returning an empty string when there is none — a missing
+// sidecar means this artifact id or version does not exist, not that something is wrong.
+func (r *Resolver) fetchSHA1(ctx context.Context, address string) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return "", err
+	}
+	response, err := r.do(request)
+	if err != nil {
+		return "", fmt.Errorf("toolchain: GET %s: %w", address, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("toolchain: GET %s: %s", address, response.Status)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(response.Body, 4<<10))
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(string(body))
+	if len(fields) == 0 {
+		return "", nil
+	}
+	sum := strings.ToLower(fields[0])
+	if len(sum) != sha1.Size*2 {
+		return "", fmt.Errorf("toolchain: %s does not look like a sha1: %q", address, sum)
+	}
+	return sum, nil
+}
+
+// hashRemoteBoth streams a download once, computing both digests in the same pass: sha1 to check
+// against the artifact's own sidecar, sha256 because that is the digest every other lock entry is
+// pinned by.
+func (r *Resolver) hashRemoteBoth(ctx context.Context, address string) (sha256sum, sha1sum string, err error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return "", "", err
+	}
+	response, err := r.do(request)
+	if err != nil {
+		return "", "", fmt.Errorf("GET %s: %w", address, err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", "", fmt.Errorf("GET %s: %s", address, response.Status)
+	}
+
+	sha256Digest, sha1Digest := sha256.New(), sha1.New()
+	if _, err := io.Copy(io.MultiWriter(sha256Digest, sha1Digest), response.Body); err != nil {
+		return "", "", err
+	}
+	return hex.EncodeToString(sha256Digest.Sum(nil)), hex.EncodeToString(sha1Digest.Sum(nil)), nil
 }
 
 // digestForURL returns the authoritative sha256 for a download when the host is one that
@@ -372,7 +505,7 @@ func (r *Resolver) getJSON(ctx context.Context, address string, into any) error 
 		}
 	}
 
-	response, err := r.HTTP.Do(request)
+	response, err := r.do(request)
 	if err != nil {
 		return fmt.Errorf("toolchain: GET %s: %w", address, err)
 	}
@@ -384,6 +517,70 @@ func (r *Resolver) getJSON(ctx context.Context, address string, into any) error 
 	return json.NewDecoder(response.Body).Decode(into)
 }
 
+// do runs a request with a retry for 429, which Maven Central hands out under the burst this
+// resolver produces — dozens of sidecar and jar requests within a few seconds, for versions
+// that are otherwise resolved one HTTP call at a time exactly like everything else here.
+// Retry-After is honored when the server sends one; otherwise the backoff is a guess, same as
+// any client talking to a server that did not say how long to wait.
+func (r *Resolver) do(request *http.Request) (*http.Response, error) {
+	const maxAttempts = 5
+	const maxRetryAfter = 30 * time.Second
+	var response *http.Response
+	var err error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if response, err = r.HTTP.Do(request); err != nil {
+			return nil, err
+		}
+		if response.StatusCode != http.StatusTooManyRequests || attempt == maxAttempts {
+			return response, nil
+		}
+		wait := retryAfter(response.Header.Get("Retry-After"))
+		if wait == 0 {
+			wait = time.Duration(attempt) * 5 * time.Second
+		}
+		// A server-sent Retry-After is honored, but not blindly: a long one is exactly what happens
+		// when a run has already been retried, killed and restarted a few times against the same
+		// host, and sleeping for however long the header says would make that worse, not better.
+		if wait > maxRetryAfter {
+			wait = maxRetryAfter
+		}
+		response.Body.Close()
+		select {
+		case <-time.After(wait):
+		case <-request.Context().Done():
+			return nil, request.Context().Err()
+		}
+	}
+	return response, nil
+}
+
+// pace is a fixed, small sleep between successive requests to a host that rate-limits by burst
+// rather than by total volume. It is not a retry: it runs whether or not the last request was
+// throttled, on the theory that avoiding a 429 is cheaper than recovering from one.
+func (r *Resolver) pace(ctx context.Context) {
+	select {
+	case <-time.After(2 * time.Second):
+	case <-ctx.Done():
+	}
+}
+
+// retryAfter parses the header as either a delay in seconds or an HTTP date, returning zero for
+// neither — the header is optional, and a server that omits it gets a guessed backoff instead.
+func retryAfter(header string) time.Duration {
+	if header == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(header); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(header); err == nil {
+		if wait := time.Until(when); wait > 0 {
+			return wait
+		}
+	}
+	return 0
+}
+
 // fetchChecksum reads a .sha256 sidecar, returning an empty string when there is none. A
 // missing sidecar is an ordinary fact about older releases, not an error.
 func (r *Resolver) fetchChecksum(ctx context.Context, address string) (string, error) {
@@ -391,7 +588,7 @@ func (r *Resolver) fetchChecksum(ctx context.Context, address string) (string, e
 	if err != nil {
 		return "", err
 	}
-	response, err := r.HTTP.Do(request)
+	response, err := r.do(request)
 	if err != nil {
 		return "", fmt.Errorf("toolchain: GET %s: %w", address, err)
 	}
@@ -427,7 +624,7 @@ func (r *Resolver) hashRemote(ctx context.Context, address string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	response, err := r.HTTP.Do(request)
+	response, err := r.do(request)
 	if err != nil {
 		return "", fmt.Errorf("GET %s: %w", address, err)
 	}

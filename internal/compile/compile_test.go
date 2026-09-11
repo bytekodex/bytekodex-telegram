@@ -70,7 +70,9 @@ func testCatalog() *toolchain.Catalog {
 			{Major: 8, ReleaseFloor: 8, ReleaseStatus: "ga"},
 			{Major: 25, ReleaseFloor: 8, ReleaseFlag: true, ReleaseStatus: "ga"},
 		},
-		Kotlin: []toolchain.LockedTool{{Version: "2.4.20", JVMTargetMax: "25", JDK: 25, Default: true}},
+		Kotlin: []toolchain.LockedTool{{Version: "2.4.20", JVMTargetMax: "25", JDK: 25, Default: true, Deps: []toolchain.LockedDependency{
+			{Name: "kotlin-stdlib.jar"}, {Name: "kotlinx-coroutines-core-jvm.jar"},
+		}}},
 		Groovy: []toolchain.LockedTool{{Version: "5.1.2", JVMTargetMax: "25", JDK: 25, Default: true}},
 	})
 }
@@ -97,12 +99,12 @@ func TestATargetTheCompilerCannotEmitIsRefusedBeforeRunning(t *testing.T) {
 
 func TestClasspathIsAddedForKotlinAndOmittedForJava(t *testing.T) {
 	kotlin, _ := testCatalog().For(detect.Kotlin)
-	if got := kotlin.ClasspathArg("/deps"); !strings.Contains(got, "coroutines") {
+	if got := kotlin.DefaultRelease().ClasspathArg("/deps"); !strings.Contains(got, "coroutines") {
 		t.Errorf("kotlin classpath = %q, want coroutines on it", got)
 	}
 
 	java, _ := testCatalog().For(detect.Java)
-	if got := java.ClasspathArg("/deps"); got != "" {
+	if got := java.DefaultRelease().ClasspathArg("/deps"); got != "" {
 		t.Errorf("java classpath = %q, want empty rather than an empty -cp", got)
 	}
 }

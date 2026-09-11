@@ -154,8 +154,8 @@ func TestManifestRejectsTwoReleasesOnOneLine(t *testing.T) {
 	manifest := &Manifest{
 		JDK: JDKSection{OperatingSystem: "linux", Architectures: []string{"x64"}, Libc: "glibc", Versions: []JDKRequest{{Major: 25}}},
 		Kotlin: VersionSection{Versions: []VersionRequest{
-			{Version: "2.4.10", JDK: 25},
-			{Version: "2.4.20", JDK: 25},
+			{Version: "2.4.10", JDK: 25, Coroutines: "1.11.0"},
+			{Version: "2.4.20", JDK: 25, Coroutines: "1.11.0"},
 		}},
 	}
 	err := manifest.validate()
@@ -213,6 +213,16 @@ func TestShippedLockCoversTheManifest(t *testing.T) {
 	for _, tool := range append(slices.Clone(lock.Kotlin), lock.Groovy...) {
 		if len(tool.SHA256) != 64 {
 			t.Errorf("%s has no usable checksum: %q", tool.Version, tool.SHA256)
+		}
+	}
+	for _, kotlin := range lock.Kotlin {
+		if len(kotlin.Deps) == 0 {
+			t.Errorf("kotlin %s has no classpath deps", kotlin.Version)
+		}
+		for _, dep := range kotlin.Deps {
+			if len(dep.SHA256) != 64 || dep.URL == "" {
+				t.Errorf("kotlin %s dep %s has no usable checksum or URL", kotlin.Version, dep.Name)
+			}
 		}
 	}
 

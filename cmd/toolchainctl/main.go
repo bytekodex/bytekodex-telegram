@@ -31,6 +31,7 @@ commands:
   show      summarize the lock as a table
   probe     ask the built images what their compilers actually support
   majors    print one locked JDK major per line, newest first
+  deps      print version, name, url and sha256 for every Kotlin classpath jar, tab-separated
 
 flags:
   -dir string        directory holding manifest.json and lock.json (default "toolchains")
@@ -67,6 +68,8 @@ func main() {
 		err = show(lockPath)
 	case "majors":
 		err = printMajors(lockPath)
+	case "deps":
+		err = printDeps(lockPath)
 	case "probe":
 		err = probe(lockPath)
 	default:
@@ -203,6 +206,21 @@ func printMajors(lockPath string) error {
 	}
 	for _, major := range lock.Majors() {
 		fmt.Println(major)
+	}
+	return nil
+}
+
+// printDeps is tab-separated on purpose, same reasoning as printMajors: a shell loop, not a JSON
+// parser, is what toolchains/sync-deps.sh wants to read this with.
+func printDeps(lockPath string) error {
+	lock, err := toolchain.LoadLock(lockPath)
+	if err != nil {
+		return err
+	}
+	for _, kotlin := range lock.Kotlin {
+		for _, dep := range kotlin.Deps {
+			fmt.Printf("%s\t%s\t%s\t%s\n", kotlin.Version, dep.Name, dep.URL, dep.SHA256)
+		}
 	}
 	return nil
 }

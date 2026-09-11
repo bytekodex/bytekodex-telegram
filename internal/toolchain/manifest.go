@@ -64,6 +64,12 @@ type VersionRequest struct {
 	JDK int `json:"jdk"`
 	// Default marks the release preselected in the keyboard.
 	Default bool `json:"default,omitempty"`
+	// Coroutines is the kotlinx-coroutines-core release this Kotlin version's classpath gets.
+	// Kotlin's class metadata is forward-readable only — a compiler reads its own version or
+	// older, never newer — so this cannot simply be "whatever is newest": it is the newest
+	// coroutines release whose own kotlin-stdlib dependency (checked in its .pom on Maven
+	// Central) is still <= this Kotlin version. Groovy leaves it empty; only Kotlin uses it.
+	Coroutines string `json:"coroutines,omitempty"`
 }
 
 // Line is the minor version line, "2.4" for "2.4.20". Two patches of one line are never offered
@@ -110,6 +116,19 @@ type LockedTool struct {
 	JVMTargetMax string `json:"jvm_target_max"`
 	JDK          int    `json:"jdk"`
 	Default      bool   `json:"default,omitempty"`
+	// Deps are the extra jars this release's classpath needs — see VersionRequest.Coroutines.
+	// Groovy has none.
+	Deps []LockedDependency `json:"deps,omitempty"`
+}
+
+// LockedDependency is one jar a compiler's classpath needs alongside the compiler itself, resolved
+// and checksummed off Maven Central the same as everything else here.
+type LockedDependency struct {
+	// Name is the bare filename it is written as on disk — what Toolchain.ClasspathArg joins
+	// onto the mount root, not the versioned filename Maven Central actually serves it under.
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
 }
 
 // Image is the tag a locked entry is built as. Kept here so the resolver, the Docker plan and
@@ -167,6 +186,9 @@ func (m *Manifest) validate() error {
 					language, tool.Line(), previous, tool.Version)
 			}
 			lines[tool.Line()] = tool.Version
+			if language == "kotlin" && tool.Coroutines == "" {
+				return fmt.Errorf("toolchain: kotlin %s has no coroutines version pinned", tool.Version)
+			}
 		}
 	}
 	return nil

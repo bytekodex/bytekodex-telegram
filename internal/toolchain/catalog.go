@@ -37,6 +37,11 @@ type Release struct {
 	// Major is the JDK this release is, for Java, or runs on, for the others. The system class
 	// store is keyed on it.
 	Major int
+	// Classpath lists the dependencies added to every compilation of this release, relative to
+	// the deps mount root. It is per-release, not per-language: Kotlin's class metadata is
+	// forward-readable only, so no one set of coroutines/stdlib jars could serve every Kotlin
+	// version at once. Without it, `suspend fun` fails on the first line that uses it.
+	Classpath []string
 
 	// usesReleaseFlag distinguishes javac 9 and up, which takes --release, from 7 and 8, which
 	// need -source and -target.
@@ -47,9 +52,6 @@ type Release struct {
 type Toolchain struct {
 	Language detect.Language
 	Releases []Release
-	// Classpath lists the dependencies added to every compilation. Kotlin without coroutines on
-	// the classpath fails on the first `suspend fun`, which is most of what people want to look at.
-	Classpath []string
 	// Command builds the compiler invocation for a release and a set of source filenames.
 	Command func(release Release, target string, sources []string) []string
 }
@@ -156,23 +158,27 @@ func javaToolchain(lock *Lock) Toolchain {
 func kotlinToolchain(lock *Lock) Toolchain {
 	releases := make([]Release, 0, len(lock.Kotlin))
 	for _, kotlin := range lock.Kotlin {
+		classpath := make([]string, len(kotlin.Deps))
+		for i, dep := range kotlin.Deps {
+			// One subdirectory per Kotlin version: two releases can be locked to the same
+			// coroutines version (see manifest.json), but never to the same stdlib, so the path
+			// has to be release-specific even where the jar's own content is shared.
+			classpath[i] = kotlin.Version + "/" + dep.Name
+		}
 		releases = append(releases, Release{
-			ID:      "kotlin" + kotlin.Version,
-			Label:   "Kotlin " + kotlin.Version,
-			Image:   kotlin.Image("kotlin"),
-			Targets: targets(8, kotlin.JVMTargetMax),
-			Default: kotlin.Default,
-			Major:   kotlin.JDK,
+			ID:        "kotlin" + kotlin.Version,
+			Label:     "Kotlin " + kotlin.Version,
+			Image:     kotlin.Image("kotlin"),
+			Targets:   targets(8, kotlin.JVMTargetMax),
+			Default:   kotlin.Default,
+			Major:     kotlin.JDK,
+			Classpath: classpath,
 		})
 	}
 	slices.Reverse(releases)
 
 	return Toolchain{
 		Language: detect.Kotlin,
-		Classpath: []string{
-			"kotlinx-coroutines-core-jvm.jar",
-			"kotlin-stdlib.jar",
-		},
 		Releases: releases,
 		Command: func(_ Release, target string, sources []string) []string {
 			// -Xno-optimize keeps the bytecode close to what the source says, which is the point
@@ -254,12 +260,12 @@ func Describe(language detect.Language, release Release, target string) string {
 
 // ClasspathArg joins the dependency list the way the JVM expects. Empty means no -cp at all,
 // which is not the same as an empty -cp.
-func (t Toolchain) ClasspathArg(root string) string {
-	if len(t.Classpath) == 0 {
+func (r Release) ClasspathArg(root string) string {
+	if len(r.Classpath) == 0 {
 		return ""
 	}
-	entries := make([]string, len(t.Classpath))
-	for i, jar := range t.Classpath {
+	entries := make([]string, len(r.Classpath))
+	for i, jar := range r.Classpath {
 		entries[i] = root + "/" + jar
 	}
 	return strings.Join(entries, ":")
