@@ -1,0 +1,80 @@
+name: bot
+
+# The bot ships whenever code that affects it lands on master. Nothing here touches the toolchain
+# images or the JDK class stores — see toolchains.yml — so a Kotlin version landing does not force
+# a bot rebuild, and a bot rebuild does not wait on a matrix of 60-odd image builds.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "Dockerfile.bot"
+      - "deploy/**"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch: {}
+
+# A deploy that started mid-push should finish before the next one starts, not race it for the
+# same container name.
+concurrency:
+  group: bot-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, bytekodex-vps]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the bot
+        uses: actions/checkout@v5
+        with:
+          path: telegram
+
+      # The render package is cgo over the platform's C ABI, so the image needs the platform's
+      # source to build it from — built from source, same as ci.yml does, rather than downloaded,
+      # so an ABI change breaks this build instead of production.
+      - name: Check out the platform
+        uses: actions/checkout@v5
+        with:
+          repository: bytekodex/bytekodex-platform
+          ref: master
+          path: platform
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build
+        run: |
+          docker build -f telegram/Dockerfile.bot \
+            -t ghcr.io/bytekodex/bot:${{ github.sha }} \
+            -t ghcr.io/bytekodex/bot:latest \
+            .
+
+      - name: Push
+        run: |
+          docker push ghcr.io/bytekodex/bot:${{ github.sha }}
+          docker push ghcr.io/bytekodex/bot:latest
+
+      # Runs on the same machine the container ends up on, so this is the whole deploy: no SSH,
+      # no separate agent, no polling for a new digest. BOT_TAG pins the exact commit that was
+      # just built, rather than trusting whatever `latest` happens to resolve to a moment later.
+      - name: Deploy
+        working-directory: telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          BOT_TAG: ${{ github.sha }}
+        run: docker compose -f deploy/docker-compose.yml up -d
+
+      - name: Confirm it is actually running
+        run: |
+          sleep 3
+          docker compose -f telegram/deploy/docker-compose.yml ps --format json | grep -q '"State":"running"'
+          docker logs --tail 5 bytekodex-bot
+
+      - name: Drop anything the previous deploy left behind
+        if: always()
+        run: docker image prune -f --filter "label!=keep" >/dev/null

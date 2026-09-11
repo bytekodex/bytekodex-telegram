@@ -1,0 +1,80 @@
+name: toolchains
+
+# Manifest changes are the only thing that should trigger a resolve — adding a version is a one-line
+# edit, and the resolver is the only code here that talks to a foojay or a GitHub release page.
+# lock.json is committed by this workflow, not by hand, so a change to it alone does not re-trigger.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "toolchains/manifest.json"
+  workflow_dispatch: {}
+
+concurrency:
+  group: toolchains-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, bytekodex-vps]
+    # A full backfill across every JDK, Kotlin and Groovy version is a one-time cost; a normal run
+    # after adding one version pushes a handful of images and finishes in minutes.
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      # GITHUB_TOKEN raises the GitHub API rate limit from 60 requests/hour to 5000, which a full
+      # resolve spends most of on its own — see resolve.go for the early-access checksum problem
+      # this avoids reintroducing.
+      - name: Resolve every version in the manifest
+        working-directory: telegram
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: go run ./cmd/toolchainctl resolve
+
+      - name: Commit the lock if resolving changed it
+        working-directory: telegram
+        run: |
+          if git diff --quiet toolchains/lock.json; then
+            echo "lock unchanged"
+            exit 0
+          fi
+          git config user.name "bytekodex-bot"
+          git config user.email "bot@bytekodex.dev"
+          git add toolchains/lock.json
+          git commit -m "toolchainctl resolve"
+          git push
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Builds and pushes only what the registry does not already have. A version's checksum is
+      # fixed once resolved, so an existing tag is byte-for-byte what a rebuild would produce.
+      - name: Build and push new toolchain images
+        working-directory: telegram
+        run: ./toolchains/deploy.sh amd64
+
+      - name: Extract system classes onto the host
+        working-directory: telegram
+        run: ./toolchains/sync-sysclasses.sh /opt/bytekodex/sysclasses
+
+      # The bot reads the lock from a bind mount, not from inside its own image, precisely so this
+      # step is enough — no rebuild, no redeploy, a new version is just there the next time someone
+      # opens the release picker.
+      - name: Publish the lock where the bot reads it, and restart it to pick it up
+        working-directory: telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          cp toolchains/lock.json /opt/bytekodex/lock.json
+          docker compose -f deploy/docker-compose.yml up -d --force-recreate bot
+
+      - run: docker image prune -f >/dev/null
+        if: always()

@@ -30,6 +30,7 @@ commands:
   plan      print the docker build commands the lock implies
   show      summarize the lock as a table
   probe     ask the built images what their compilers actually support
+  majors    print one locked JDK major per line, newest first
 
 flags:
   -dir string        directory holding manifest.json and lock.json (default "toolchains")
@@ -64,6 +65,8 @@ func main() {
 		err = plan(lockPath, *platform)
 	case "show":
 		err = show(lockPath)
+	case "majors":
+		err = printMajors(lockPath)
 	case "probe":
 		err = probe(lockPath)
 	default:
@@ -189,6 +192,19 @@ func dockerArch(architecture string) string {
 	default:
 		return architecture
 	}
+}
+
+// printMajors is deliberately plain text, one integer per line: it exists so a deploy script can
+// loop over `docker pull ghcr.io/bytekodex/sysclasses:$major` without a JSON parser on the host.
+func printMajors(lockPath string) error {
+	lock, err := toolchain.LoadLock(lockPath)
+	if err != nil {
+		return err
+	}
+	for _, major := range lock.Majors() {
+		fmt.Println(major)
+	}
+	return nil
 }
 
 func sysclassImage(major int) string {
