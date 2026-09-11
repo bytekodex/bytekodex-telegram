@@ -44,6 +44,15 @@ jobs:
           ref: master
           path: platform
 
+      # Nothing under here names this VPS. A fresh box just needs Docker installed and this
+      # runner registered on it (see the README's "Running this yourself" section) — the two
+      # facts a new machine actually differs on, the docker group's GID and where the bot's state
+      # lives, are derived here rather than baked into a file that would be wrong on the next box.
+      - name: Bootstrap the host paths this deploy reads and writes
+        run: |
+          mkdir -p /opt/bytekodex/{scratch,deps,sysclasses}
+          echo "BYTEKODEX_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> "$GITHUB_ENV"
+
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 

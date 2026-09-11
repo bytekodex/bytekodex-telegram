@@ -30,6 +30,12 @@ jobs:
         with:
           go-version: "1.26"
 
+      # Nothing under here names this VPS — see the matching step in bot.yml.
+      - name: Bootstrap the host paths this workflow reads and writes
+        run: |
+          mkdir -p /opt/bytekodex/{scratch,deps,sysclasses}
+          echo "BYTEKODEX_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> "$GITHUB_ENV"
+
       # GITHUB_TOKEN raises the GitHub API rate limit from 60 requests/hour to 5000, which a full
       # resolve spends most of on its own — see resolve.go for the early-access checksum problem
       # this avoids reintroducing.

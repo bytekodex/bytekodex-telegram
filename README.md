@@ -58,6 +58,65 @@ compiler plugins. So every compilation happens in a throwaway container with no 
 read-only root, an empty capability set, a pid cap, a memory cap and a deadline. `javac` also gets
 `-proc:none`.
 
+## Deploying to a fresh machine
+
+Production deploys itself: `.github/workflows/bot.yml` and `.github/workflows/toolchains.yml` run
+on a self-hosted GitHub Actions runner and finish with `docker compose up -d` on that same
+machine — no SSH step, no separate deploy agent. Nothing in either workflow or in
+`deploy/docker-compose.yml` names a specific host: the two facts that actually differ from one
+machine to the next — the Docker group's GID, and whether `/opt/bytekodex` exists yet — are
+computed by the workflow itself on every run. Moving to a new VPS is the four steps below, done
+once, and then every push behaves exactly like it did on the old one.
+
+### 0. Install Docker
+
+```shell
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$(whoami)"
+```
+
+Log out and back in (or `newgrp docker`) for the group change to take effect.
+
+### 1. Give the deploy user a place to keep state
+
+`/opt/bytekodex` is where compiled classes, the Kotlin classpath jars and the resolved
+`lock.json` live on the host, bind-mounted into the bot container at the same path — see the
+comment at the top of `deploy/docker-compose.yml` for why the path has to match on both sides.
+The workflows create everything under it themselves; they cannot create the directory itself if
+`/opt` is root-owned, which on a fresh box it is:
+
+```shell
+sudo mkdir -p /opt/bytekodex
+sudo chown "$(whoami):$(whoami)" /opt/bytekodex
+```
+
+### 2. Register the runner
+
+Follow GitHub's own instructions for `bytekodex/bytekodex-telegram` → Settings → Actions →
+Runners → New self-hosted runner, and register it with the label both workflows already ask for:
+
+```shell
+./config.sh --url https://github.com/bytekodex/bytekodex-telegram --labels bytekodex-vps
+./svc.sh install && ./svc.sh start
+```
+
+The label is just a string GitHub matches `runs-on: [self-hosted, bytekodex-vps]` against — it
+has nothing to do with the machine's IP, so a new box under the same label is a drop-in
+replacement for the old one from the workflows' point of view.
+
+### 3. Set the one secret that is not already there
+
+`GITHUB_TOKEN` is supplied automatically by Actions. `TELEGRAM_BOT_TOKEN` is not — add it under
+the repository's Settings → Secrets and variables → Actions.
+
+### 4. Push
+
+`toolchains.yml` runs on a change to `toolchains/manifest.json` and populates
+`/opt/bytekodex/{sysclasses,deps,lock.json}` from scratch — a full backfill the first time, which
+is why it has a 180-minute timeout. `bot.yml` runs on a change to the bot's own code and builds,
+pushes and starts the container. Either can be run by hand first via `workflow_dispatch` from the
+Actions tab if you would rather not wait for the next real change to trigger it.
+
 ## Running it
 
 The bot needs the platform's shared library, a monospace TrueType face, and a container runtime.
