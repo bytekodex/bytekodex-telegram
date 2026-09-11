@@ -23,7 +23,9 @@ RUN go mod download
 COPY telegram/ .
 COPY --from=platform /src/target/release/libbytekodex.a /usr/local/lib/libbytekodex.a
 ENV CGO_ENABLED=1
-ENV CGO_LDFLAGS=-L/usr/local/lib
+# -lm because the static lib is Rust code linked into a C program now, and libm's powf/etc. are
+# no longer pulled in implicitly the way they are for a normal C toolchain invocation.
+ENV CGO_LDFLAGS="-L/usr/local/lib -lm"
 RUN go build -trimpath -ldflags="-s -w" -o /out/bot ./cmd/bot
 
 # --- the docker CLI, from Docker's own minimal client-only image rather than a hand-verified
