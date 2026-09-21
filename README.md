@@ -156,6 +156,3 @@ The renderer tests skip themselves when no monospace face is installed. The comp
 the parts that do not need a container runtime, which notably includes the check that a filename
 from a stranger cannot escape the scratch directory.
 
-## License
-
-Apache-2.0.

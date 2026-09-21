@@ -1,0 +1,4 @@
+* text=auto eol=lf
+
+go.sum text -diff linguist-generated
+toolchains/lock.json text -diff linguist-generated
