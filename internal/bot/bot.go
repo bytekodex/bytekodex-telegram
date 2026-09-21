@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/bytekodex/bytekodex-telegram/internal/compile"
 	"github.com/bytekodex/bytekodex-telegram/internal/detect"
@@ -235,6 +234,12 @@ func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.S
 		Corner:   20,
 	}
 
+	target := s.Target
+	if target == "" {
+		target = release.DefaultTarget()
+	}
+	descriptor := toolchain.Describe(detect.Java, release, target)
+
 	stats, err := h.Renderer.Pages(class.Bytes, options)
 	if err != nil {
 		h.Log.Warn("counting pages for a system class", "class", class.Name, "error", err)
@@ -271,15 +276,15 @@ func (h *Handler) serveSystemClass(ctx context.Context, b *bot.Bot, s *session.S
 	media := make([]models.InputMedia, 0, len(images))
 	base := attachmentName(class.Name)
 	for i, image := range images {
-		name, caption := base, class.Name
+		name := base
 		if len(images) > 1 {
 			name = fmt.Sprintf("%s.p%d.png", strings.TrimSuffix(base, ".png"), i+1)
-			caption = fmt.Sprintf("%s (%d/%d)", class.Name, i+1, len(images))
 		}
 		media = append(media, &models.InputMediaDocument{
 			Media:           "attach://" + name,
 			MediaAttachment: image,
-			Caption:         caption,
+			Caption:         mediaCaption(class.Name, descriptor, i+1, len(images)),
+			ParseMode:       models.ParseModeHTML,
 		})
 	}
 
@@ -390,9 +395,11 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 		}
 	}()
 
-	media := make([]models.InputMedia, 0, maxImagesPerAlbum)
+	// Two passes rather than one: the caption on every image says which one out of how many this
+	// is, and "how many" is not known until rendering has already decided which classes made it.
+	var names []string
 	for _, artifact := range result.Artifacts {
-		if len(media) == maxImagesPerAlbum {
+		if len(images) == maxImagesPerAlbum {
 			break
 		}
 		image, err := h.Renderer.Render(artifact.Bytes, render.Options{
@@ -406,23 +413,29 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 			continue
 		}
 		images = append(images, image)
-		// Documents rather than photos. sendPhoto re-encodes on Telegram's servers, and JPEG on
-		// small sharp glyphs is exactly the wrong trade: the whole product here is legible text.
-		// A document keeps the bytes, and the width+height cap does not apply to it either.
-		//
-		// The PNG is streamed straight out of the buffer Rust wrote it into: no temporary file,
-		// and no second copy of the bytes.
-		name := attachmentName(artifact.Name)
-		media = append(media, &models.InputMediaDocument{
-			Media:           "attach://" + name,
-			MediaAttachment: image,
-			Caption:         artifact.Name,
-		})
+		names = append(names, artifact.Name)
 	}
 
-	if len(media) == 0 {
+	if len(images) == 0 {
 		h.edit(ctx, b, s.ChatID, s.MessageID, fail+"Compiled, but nothing could be rendered.", ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
+	}
+
+	// Documents rather than photos. sendPhoto re-encodes on Telegram's servers, and JPEG on small
+	// sharp glyphs is exactly the wrong trade: the whole product here is legible text. A document
+	// keeps the bytes, and the width+height cap does not apply to it either.
+	//
+	// Every PNG is streamed straight out of the buffer Rust wrote it into: no temporary file, and
+	// no second copy of the bytes.
+	descriptor := toolchain.Describe(s.Language, release, target)
+	media := make([]models.InputMedia, 0, len(images))
+	for i, image := range images {
+		media = append(media, &models.InputMediaDocument{
+			Media:           "attach://" + attachmentName(names[i]),
+			MediaAttachment: image,
+			Caption:         mediaCaption(names[i], descriptor, i+1, len(images)),
+			ParseMode:       models.ParseModeHTML,
+		})
 	}
 
 	if err := h.sendImages(ctx, b, s, media); err != nil {
@@ -431,23 +444,22 @@ func (h *Handler) compileAndSend(ctx context.Context, b *bot.Bot, s *session.Ses
 		return
 	}
 
-	summary := fmt.Sprintf("%s%s · %s class(es) in %s", success, code(toolchain.Describe(s.Language, release, target)),
-		bold(fmt.Sprint(len(result.Artifacts))), result.Took.Round(time.Millisecond))
-	if skipped := len(result.Artifacts) - len(media); skipped > 0 {
-		summary += fmt.Sprintf(" · %s not shown", bold(fmt.Sprint(skipped)))
-	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+	h.edit(ctx, b, s.ChatID, s.MessageID, compileSummary(s.Language, release, target, result, len(images)),
+		ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 }
 
 // sendImages uses an album for several classes and a single document for one, because a media
-// group of one is rejected.
+// group of one is rejected. The filename travels as the "attach://name" prefix on Media rather
+// than being derived from the caption — the caption is HTML now, and parsing a filename back out
+// of "⚙️ <code>...</code>" is not a thing worth building when the name was right there already.
 func (h *Handler) sendImages(ctx context.Context, b *bot.Bot, s *session.Session, media []models.InputMedia) error {
 	if len(media) == 1 {
 		only := media[0].(*models.InputMediaDocument)
 		_, err := b.SendDocument(ctx, &bot.SendDocumentParams{
-			ChatID:   s.ChatID,
-			Document: &models.InputFileUpload{Filename: attachmentName(only.Caption), Data: only.MediaAttachment},
-			Caption:  only.Caption,
+			ChatID:    s.ChatID,
+			Document:  &models.InputFileUpload{Filename: strings.TrimPrefix(only.Media, "attach://"), Data: only.MediaAttachment},
+			Caption:   only.Caption,
+			ParseMode: only.ParseMode,
 		})
 		return err
 	}
@@ -459,7 +471,7 @@ func (h *Handler) repaint(ctx context.Context, b *bot.Bot, s *session.Session, p
 	if s == nil {
 		return
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, ui.Caption(h.Catalog, s), ui.Keyboard(h.Catalog, s, panel, h.SysClasses))
+	h.edit(ctx, b, s.ChatID, s.MessageID, ui.Header(h.Catalog, s), ui.Keyboard(h.Catalog, s, panel, h.SysClasses))
 }
 
 func (h *Handler) edit(ctx context.Context, b *bot.Bot, chatID int64, messageID int, text string, markup models.ReplyMarkup) {
@@ -495,12 +507,15 @@ func (h *Handler) answer(ctx context.Context, b *bot.Bot, queryID, text string) 
 	}
 }
 
-// reportCompileFailure shows the compiler's own words, rendered rather than pasted.
-//
-// A diagnostic is the second most common thing a user sees here, and a chat message flattens
-// everything that makes one readable: which file, which line, what the caret pointed at. So it
-// goes through the same renderer as the bytecode would have, and only falls back to text if even
-// that fails.
+// diagnosticCaption labels the rendered dump. It deliberately does not repeat the chat message's
+// own summary ("The compiler was not happy.") — that sentence belongs above the keyboard, and a
+// second copy of it under the image would say nothing the filename does not already imply.
+const diagnosticCaption = "Compiler diagnostic details dump"
+
+// reportCompileFailure shows the compiler's own words twice, in two different ways: as a screenshot
+// (the renderer's dump reads a caret and a line number better than plain text ever could) and,
+// right in the chat message, as a code block — a screenshot is worth opening for the layout, but
+// nobody should have to open it just to read three lines of text they could have scrolled to.
 func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *session.Session, failure error) {
 	summary, output := compileMessage(failure)
 
@@ -508,6 +523,11 @@ func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *sessi
 		h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
+	// Truncated regardless of whether the screenshot below also has the full text: a generated
+	// file can produce hundreds of diagnostics, and Telegram rejects a message over 4096
+	// characters. code() both formats this as the compiler output it is and escapes it — a
+	// generic's "<T>" would otherwise be read as an HTML tag and vanish instead of showing up.
+	full := summary + "\n\n" + code(firstLines(output, 25))
 
 	image, renderErr := h.Renderer.Render([]byte(output), render.Options{
 		Kind:   render.Diagnostic,
@@ -515,12 +535,7 @@ func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *sessi
 	})
 	if renderErr != nil {
 		h.Log.Warn("rendering a diagnostic", "error", renderErr)
-		// Better a wall of text than nothing at all, but truncated: a generated file can produce
-		// hundreds of diagnostics and Telegram rejects a message over 4096 characters. code()
-		// both formats it as the compiler output it is and escapes it — a generic's "<T>" would
-		// otherwise be read as an HTML tag and vanish rather than show up as text.
-		h.edit(ctx, b, s.ChatID, s.MessageID, summary+"\n\n"+code(firstLines(output, 25)),
-			ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+		h.edit(ctx, b, s.ChatID, s.MessageID, full, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 		return
 	}
 	defer image.Close()
@@ -528,12 +543,12 @@ func (h *Handler) reportCompileFailure(ctx context.Context, b *bot.Bot, s *sessi
 	_, err := b.SendDocument(ctx, &bot.SendDocumentParams{
 		ChatID:   s.ChatID,
 		Document: &models.InputFileUpload{Filename: "diagnostics.png", Data: image},
-		Caption:  summary,
+		Caption:  diagnosticCaption,
 	})
 	if err != nil {
 		h.Log.Error("sending a diagnostic", "error", err)
 	}
-	h.edit(ctx, b, s.ChatID, s.MessageID, summary, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
+	h.edit(ctx, b, s.ChatID, s.MessageID, full, ui.Keyboard(h.Catalog, s, ui.PanelMain, h.SysClasses))
 }
 
 // compileMessage separates the one-line summary from the compiler's output, so the summary can

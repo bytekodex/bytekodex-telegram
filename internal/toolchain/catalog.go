@@ -252,9 +252,12 @@ func (r Release) DefaultTarget() string {
 	return r.Targets[0]
 }
 
-// Describe is the one-line summary shown above the keyboard.
-func Describe(language detect.Language, release Release, target string) string {
-	return fmt.Sprintf("%s · %s · bytecode %s", language.Display(), release.Label, target)
+// Describe is the one-line summary shown above the keyboard. It does not repeat the language:
+// Kotlin and Groovy's own Label already says so ("Kotlin 2.4.20"), and Java's ("JDK 28") reads as
+// Java without being told — the language argument stays so a caller does not have to change if
+// that ever stops being true.
+func Describe(_ detect.Language, release Release, target string) string {
+	return fmt.Sprintf("%s · bytecode %s", release.Label, target)
 }
 
 // ClasspathArg joins the dependency list the way the JVM expects. Empty means no -cp at all,

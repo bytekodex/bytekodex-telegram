@@ -114,40 +114,61 @@ func ViewByID(id string) (render.View, bool) {
 	return 0, false
 }
 
-// Caption is the text above the keyboard. It states what was detected rather than asking about
-// it, because a question the user has to answer before anything happens is the thing to avoid.
+// Caption is the text for the very first message after a snippet arrives: the detection guess,
+// crystal ball and all, plus what it will compile with. It is never shown again after that — see
+// Header, which is what every later repaint uses instead. Restating "looks like Kotlin" once the
+// user has already seen it, or already compiled with it, would read as a fresh guess that never
+// happened; nothing here re-detects anything after the first message.
 func Caption(catalog *toolchain.Catalog, s *session.Session) string {
+	if s.Language == detect.Unknown {
+		return "I could not tell what language this is — pick one below."
+	}
+
 	var b strings.Builder
-
-	switch {
-	case s.Language == detect.Unknown:
-		b.WriteString("I could not tell what language this is — pick one below.")
-	case s.Detected.Confident && s.Language == s.Detected.Language:
-		fmt.Fprintf(&b, "Looks like %s.", s.Language.Display())
-	case s.Language == s.Detected.Language:
-		fmt.Fprintf(&b, "Might be %s — change it if I got that wrong.", s.Language.Display())
-	default:
-		fmt.Fprintf(&b, "%s, as you asked.", s.Language.Display())
+	if s.Detected.Confident {
+		fmt.Fprintf(&b, "🔮 Looks like %s.", s.Language.Display())
+	} else {
+		fmt.Fprintf(&b, "🔮 Might be %s — change it if I got that wrong.", s.Language.Display())
 	}
-
-	if chain, ok := catalog.For(s.Language); ok {
-		release := chain.DefaultRelease()
-		if chosen, found := chain.Release(s.ReleaseID); found {
-			release = chosen
-		}
-		target := s.Target
-		if target == "" {
-			target = release.DefaultTarget()
-		}
-		// This line is sent as HTML (see the bot package's edit/send), and code-styling it reads
-		// as what it is: an identifier and a version, not prose.
-		fmt.Fprintf(&b, "\n<code>%s</code>", html.EscapeString(toolchain.Describe(s.Language, release, target)))
+	if line := descriptorLine(catalog, s); line != "" {
+		fmt.Fprintf(&b, "\n\nWill compile with %s", line)
 	}
-
 	if n := len(s.Files); n > 1 {
 		fmt.Fprintf(&b, "\n%d files", n)
 	}
 	return b.String()
+}
+
+// Header is what every repaint after the first message shows: just the release and target this
+// session is set to right now, live, with no guess sentence in front of it.
+func Header(catalog *toolchain.Catalog, s *session.Session) string {
+	line := descriptorLine(catalog, s)
+	if line == "" {
+		return "Pick a language below."
+	}
+	if n := len(s.Files); n > 1 {
+		return fmt.Sprintf("%s\n%d files", line, n)
+	}
+	return line
+}
+
+// descriptorLine is the release and target a compile would use right now, code-styled since it
+// reads as an identifier and a version, not prose. Empty when the catalog has nothing for this
+// language yet.
+func descriptorLine(catalog *toolchain.Catalog, s *session.Session) string {
+	chain, ok := catalog.For(s.Language)
+	if !ok {
+		return ""
+	}
+	release := chain.DefaultRelease()
+	if chosen, found := chain.Release(s.ReleaseID); found {
+		release = chosen
+	}
+	target := s.Target
+	if target == "" {
+		target = release.DefaultTarget()
+	}
+	return "<code>" + html.EscapeString(toolchain.Describe(s.Language, release, target)) + "</code>"
 }
 
 // Stock reports which JDK versions have system classes stored for them. It is an interface rather
