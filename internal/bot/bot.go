@@ -98,8 +98,9 @@ func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 
 	guess := detect.Source(code)
-	name := "Snippet" + guess.Language.Extension()
-	s := h.Sessions.Start(message.Chat.ID, []session.File{{Name: name, Content: code}}, guess)
+	s := h.Sessions.Start(message.Chat.ID, []session.File{
+		{Name: guess.Language.SourceName("Snippet"), Content: code},
+	}, guess)
 
 	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      s.ChatID,
@@ -136,10 +137,7 @@ func (h *Handler) callback(ctx context.Context, b *bot.Bot, update *models.Updat
 
 	case ui.ActionSetLanguage:
 		s = h.Sessions.Update(chatID, func(s *session.Session) {
-			s.Language = detect.Language(press.Value)
-			// A different language means a different compiler, so the version and target that
-			// belonged to the old one no longer mean anything.
-			s.ReleaseID, s.Target = "", ""
+			s.SetLanguage(detect.Language(press.Value))
 		})
 		h.repaint(ctx, b, s, ui.PanelMain)
 

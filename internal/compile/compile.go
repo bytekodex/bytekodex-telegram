@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bytekodex/bytekodex-telegram/internal/detect"
 	"github.com/bytekodex/bytekodex-telegram/internal/session"
 	"github.com/bytekodex/bytekodex-telegram/internal/toolchain"
 )
@@ -117,7 +118,7 @@ func (c *Container) Compile(
 	}
 	defer os.RemoveAll(scratch)
 
-	names, err := writeSources(scratch, files)
+	names, err := writeSources(scratch, files, chain.Language)
 	if err != nil {
 		return Result{}, err
 	}
@@ -207,14 +208,17 @@ func (c *Container) args(scratch string, release toolchain.Release, command []st
 }
 
 // writeSources lays the files out and returns the names to pass the compiler. A user-supplied
-// name is not trusted: only its base is kept, so nothing can escape the scratch directory.
-func writeSources(scratch string, files []session.File) ([]string, error) {
+// name is not trusted: only its base is kept, so nothing can escape the scratch directory, and
+// the suffix is the compiler's, so a Kotlin guess that the user corrected to Java is not still
+// handed to javac as Snippet.kt.
+func writeSources(scratch string, files []session.File, language detect.Language) ([]string, error) {
 	names := make([]string, 0, len(files))
 	for i, file := range files {
 		name := filepath.Base(file.Name)
 		if name == "." || name == string(filepath.Separator) || strings.HasPrefix(name, "..") {
-			name = fmt.Sprintf("Snippet%d.txt", i)
+			name = fmt.Sprintf("Snippet%d", i)
 		}
+		name = language.SourceName(name)
 		if err := os.WriteFile(filepath.Join(scratch, name), []byte(file.Content), 0o644); err != nil {
 			return nil, fmt.Errorf("compile: writing %s: %w", name, err)
 		}

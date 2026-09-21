@@ -54,6 +54,19 @@ func (l Language) Extension() string {
 	}
 }
 
+// SourceName is the filename this language's compiler will actually read. The detector names a
+// paste after its guess, and a later override has to change the suffix too: javac treats anything
+// it does not recognise as a class name, and the error it then prints is about annotation
+// processing rather than about the language being wrong.
+func (l Language) SourceName(filename string) string {
+	name := path.Base(filename)
+	name = strings.TrimSuffix(name, path.Ext(name))
+	if name == "" || name == "." || name == ".." {
+		name = "Snippet"
+	}
+	return name + l.Extension()
+}
+
 // Guess is a language with the confidence behind it.
 type Guess struct {
 	Language Language

@@ -47,6 +47,17 @@ func (s *Session) TotalBytes() int {
 	return total
 }
 
+// SetLanguage records an override. The detector named the paste after its guess, and the
+// compiler that is about to run picks a frontend by suffix, so the files follow too. The
+// version and target belonged to the previous compiler and no longer mean anything.
+func (s *Session) SetLanguage(language detect.Language) {
+	s.Language = language
+	for i, file := range s.Files {
+		s.Files[i].Name = language.SourceName(file.Name)
+	}
+	s.ReleaseID, s.Target = "", ""
+}
+
 // Store keeps sessions per chat, one at a time: a second snippet replaces the first rather than
 // stacking up keyboards that all look alike.
 type Store struct {

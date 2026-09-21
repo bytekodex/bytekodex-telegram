@@ -62,6 +62,27 @@ func TestSourceUnknown(t *testing.T) {
 	}
 }
 
+func TestSourceNameFollowsTheLanguageNotTheGuess(t *testing.T) {
+	cases := []struct {
+		language Language
+		in, want string
+	}{
+		{Java, "Snippet.kt", "Snippet.java"},
+		{Kotlin, "Main.java", "Main.kt"},
+		{Groovy, "Foo.scala", "Foo.groovy"},
+		{Java, "Already.java", "Already.java"},
+		{Java, "noext", "noext.java"},
+		{Java, "", "Snippet.java"},
+		{Java, "..", "Snippet.java"},
+		{Java, "/abs/path/Helper.kt", "Helper.java"},
+	}
+	for _, c := range cases {
+		if got := c.language.SourceName(c.in); got != c.want {
+			t.Errorf("%s.SourceName(%q) = %q, want %q", c.language, c.in, got, c.want)
+		}
+	}
+}
+
 func TestStripNonCodeKeepsCodeAfterSlashStarInString(t *testing.T) {
 	code := "@WebFilter(\"/*\")\npublic class F {}\n"
 	want := "@WebFilter(\"  \")\npublic class F {}\n"

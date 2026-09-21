@@ -21,7 +21,7 @@ func TestSourceNamesCannotEscapeTheScratchDirectory(t *testing.T) {
 		{Name: "../../etc/passwd", Content: "x"},
 		{Name: "/absolute/Main.java", Content: "y"},
 		{Name: "sub/dir/Ok.java", Content: "z"},
-	})
+	}, detect.Java)
 	if err != nil {
 		t.Fatalf("writeSources: %v", err)
 	}
@@ -126,5 +126,26 @@ func TestCollectStopsAtTheOutputLimit(t *testing.T) {
 	}
 	if artifacts[0].Name != "A.class" || artifacts[1].Name != "B.class" {
 		t.Errorf("order is not stable: %q, %q", artifacts[0].Name, artifacts[1].Name)
+	}
+}
+
+// The detector names a paste after its guess. Switching the keyboard to Java must not still
+// hand javac a .kt file — it reports that as an annotation-processing error, not a wrong language.
+func TestWriteSourcesUsesTheCompilerSuffix(t *testing.T) {
+	scratch := t.TempDir()
+	names, err := writeSources(scratch, []session.File{
+		{Name: "Snippet.kt", Content: "value class Snippet {}"},
+	}, detect.Java)
+	if err != nil {
+		t.Fatalf("writeSources: %v", err)
+	}
+	if len(names) != 1 || names[0] != "Snippet.java" {
+		t.Errorf("names = %v, want [Snippet.java]", names)
+	}
+	if _, err := os.Stat(filepath.Join(scratch, "Snippet.java")); err != nil {
+		t.Errorf("Snippet.java was not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(scratch, "Snippet.kt")); err == nil {
+		t.Error("left the guessed .kt name on disk")
 	}
 }

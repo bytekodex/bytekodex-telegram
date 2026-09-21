@@ -73,6 +73,28 @@ func TestSweepDropsWhatNobodyCameBackFor(t *testing.T) {
 	}
 }
 
+func TestSetLanguageRetargetsSourceSuffixes(t *testing.T) {
+	store := NewStore(time.Minute)
+	store.Start(1, []File{{Name: "Snippet.kt", Content: "class Snippet {}"}}, detect.Guess{Language: detect.Kotlin})
+	store.Update(1, func(s *Session) {
+		s.ReleaseID, s.Target = "kotlin2.4.20", "25"
+	})
+
+	session := store.Update(1, func(s *Session) { s.SetLanguage(detect.Java) })
+	if session == nil {
+		t.Fatal("no session")
+	}
+	if session.Language != detect.Java {
+		t.Errorf("Language = %q, want java", session.Language)
+	}
+	if session.Files[0].Name != "Snippet.java" {
+		t.Errorf("Name = %q, want Snippet.java", session.Files[0].Name)
+	}
+	if session.ReleaseID != "" || session.Target != "" {
+		t.Errorf("kept the kotlin compiler: release=%q target=%q", session.ReleaseID, session.Target)
+	}
+}
+
 func TestTotalBytesCountsEveryFile(t *testing.T) {
 	store := NewStore(time.Minute)
 	session := store.Start(1, []File{
