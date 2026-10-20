@@ -32,12 +32,15 @@ commands:
   probe     ask the built images what their compilers actually support
   majors    print one locked JDK major per line, newest first
   deps      print version, name, url and sha256 for every Kotlin classpath jar, tab-separated
+  sync      put everything the bot reads on this machine: compiler images, system classes,
+            Kotlin classpath jars, and a scratch directory, all under -root
 
 flags:
   -dir string        directory holding manifest.json and lock.json (default "toolchains")
   -quiet             do not report progress while resolving
   -platform string   plan: restrict to one architecture (amd64 or arm64), skipping versions that
                       have nothing resolved for it
+  -root string       sync: where the bot's data lives (default "/opt/bytekodex")
 `
 
 func main() {
@@ -50,6 +53,7 @@ func main() {
 	dir := flags.String("dir", "toolchains", "directory holding manifest.json and lock.json")
 	quiet := flags.Bool("quiet", false, "do not report progress while resolving")
 	platform := flags.String("platform", "", "restrict plan to one Docker architecture (amd64 or arm64); empty means every architecture the lock has")
+	root := flags.String("root", "/opt/bytekodex", "sync: where the bot's data lives")
 	flags.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	if err := flags.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
@@ -72,6 +76,8 @@ func main() {
 		err = printDeps(lockPath)
 	case "probe":
 		err = probe(lockPath)
+	case "sync":
+		err = syncHost(lockPath, *root)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -197,8 +203,8 @@ func dockerArch(architecture string) string {
 	}
 }
 
-// printMajors is deliberately plain text, one integer per line: it exists so a deploy script can
-// loop over `docker pull ghcr.io/bytekodex/sysclasses:$major` without a JSON parser on the host.
+// printMajors is deliberately plain text, one integer per line, so a shell loop can go over
+// `docker pull ghcr.io/bytekodex/sysclasses:$major` without a JSON parser.
 func printMajors(lockPath string) error {
 	lock, err := toolchain.LoadLock(lockPath)
 	if err != nil {
@@ -211,7 +217,7 @@ func printMajors(lockPath string) error {
 }
 
 // printDeps is tab-separated on purpose, same reasoning as printMajors: a shell loop, not a JSON
-// parser, is what toolchains/sync-deps.sh wants to read this with.
+// parser, is what reads it.
 func printDeps(lockPath string) error {
 	lock, err := toolchain.LoadLock(lockPath)
 	if err != nil {

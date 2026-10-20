@@ -16,25 +16,20 @@ concurrency:
 
 jobs:
   build:
-    runs-on: [self-hosted, bytekodex-vps]
+    runs-on: ubuntu-latest
     # A full backfill across every JDK, Kotlin and Groovy version is a one-time cost; a normal run
     # after adding one version pushes a handful of images and finishes in minutes.
     timeout-minutes: 180
     permissions:
       contents: write
       packages: write
+      actions: write
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
-
-      # Nothing under here names this VPS — see the matching step in bot.yml.
-      - name: Bootstrap the host paths this workflow reads and writes
-        run: |
-          mkdir -p /opt/bytekodex/{scratch,deps,sysclasses}
-          echo "BYTEKODEX_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> "$GITHUB_ENV"
 
       # GITHUB_TOKEN raises the GitHub API rate limit from 60 requests/hour to 5000, which a full
       # resolve spends most of on its own — see resolve.go for the early-access checksum problem
@@ -45,6 +40,7 @@ jobs:
         run: go run ./cmd/toolchainctl resolve
 
       - name: Commit the lock if resolving changed it
+        id: lock
         run: |
           if git diff --quiet toolchains/lock.json; then
             echo "lock unchanged"
@@ -55,6 +51,7 @@ jobs:
           git add toolchains/lock.json
           git commit -m "toolchainctl resolve"
           git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -64,21 +61,11 @@ jobs:
       - name: Build and push new toolchain images
         run: ./toolchains/deploy.sh amd64
 
-      - name: Extract system classes onto the host
-        run: ./toolchains/sync-sysclasses.sh /opt/bytekodex/sysclasses
-
-      - name: Seed the Kotlin classpath jars onto the host
-        run: ./toolchains/sync-deps.sh /opt/bytekodex/deps
-
-      # The bot reads the lock from a bind mount, not from inside its own image, precisely so this
-      # step is enough — no rebuild, no redeploy, a new version is just there the next time someone
-      # opens the release picker.
-      - name: Publish the lock where the bot reads it, and restart it to pick it up
+      # The bot reads the lock from its own image. A push made with GITHUB_TOKEN starts no
+      # workflow, so the new lock ships by starting bot.yml here; the server's deploy then pulls
+      # the new images and extracts their system classes before the bot comes back.
+      - name: Ship the new lock with the bot
+        if: steps.lock.outputs.changed == 'true'
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: |
-          cp toolchains/lock.json /opt/bytekodex/lock.json
-          docker compose -f deploy/docker-compose.yml up -d --force-recreate bot
-
-      - run: docker image prune -f >/dev/null
-        if: always()
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bot.yml --ref master

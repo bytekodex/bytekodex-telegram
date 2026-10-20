@@ -32,6 +32,9 @@ flush() {
   echo "build ${tag}"
   echo "${current}" | sh
   docker push "${tag}"
+  # A hosted runner has a few gigabytes free, not room for every image of a backfill. A later
+  # build that starts FROM this one pulls it back from the registry.
+  docker image rm "${tag}" >/dev/null
   built=$((built + 1))
 }
 

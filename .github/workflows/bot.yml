@@ -1,8 +1,9 @@
 name: bot
 
 # The bot ships whenever code that affects it lands on master. Nothing here touches the toolchain
-# images or the JDK class stores — see toolchains.yml — so a Kotlin version landing does not force
-# a bot rebuild, and a bot rebuild does not wait on a matrix of 60-odd image builds.
+# images — see toolchains.yml — so a Kotlin version landing does not force a rebuild of 60-odd
+# images, and a bot rebuild does not wait on them. A new lock does ship through here: the bot reads
+# it from its own image, and toolchains.yml starts this workflow after committing one.
 on:
   push:
     branches: [master]
@@ -10,21 +11,20 @@ on:
       - "cmd/**"
       - "internal/**"
       - "Dockerfile.bot"
-      - "deploy/**"
       - "go.mod"
       - "go.sum"
+      - "toolchains/lock.json"
   workflow_dispatch: {}
 
-# A deploy that started mid-push should finish before the next one starts, not race it for the
-# same container name.
+# A deploy that started mid-push should finish before the next one starts, not race it.
 concurrency:
   group: bot-deploy
   cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: [self-hosted, bytekodex-vps]
-    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -44,15 +44,6 @@ jobs:
           ref: master
           path: platform
 
-      # Nothing under here names this VPS. A fresh box just needs Docker installed and this
-      # runner registered on it (see the README's "Running this yourself" section) — the two
-      # facts a new machine actually differs on, the docker group's GID and where the bot's state
-      # lives, are derived here rather than baked into a file that would be wrong on the next box.
-      - name: Bootstrap the host paths this deploy reads and writes
-        run: |
-          mkdir -p /opt/bytekodex/{scratch,deps,sysclasses}
-          echo "BYTEKODEX_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> "$GITHUB_ENV"
-
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
@@ -68,28 +59,14 @@ jobs:
           docker push ghcr.io/bytekodex/bot:${{ github.sha }}
           docker push ghcr.io/bytekodex/bot:latest
 
-      # Idempotent and cheap (a sha1 check, most runs), and belongs here too: a box that has only
-      # ever run this workflow should still have a bot that can compile Kotlin.
-      - name: Seed the Kotlin classpath jars onto the host
-        working-directory: telegram
-        run: ./toolchains/sync-deps.sh /opt/bytekodex/deps
-
-      # Runs on the same machine the container ends up on, so this is the whole deploy: no SSH,
-      # no separate agent, no polling for a new digest. BOT_TAG pins the exact commit that was
-      # just built, rather than trusting whatever `latest` happens to resolve to a moment later.
+      # The server runs the bot as a Komodo stack. This is the same signed call GitHub's own push
+      # webhook makes: Komodo pulls `latest`, readies the host with `toolchainctl sync`, and
+      # restarts the bot.
       - name: Deploy
-        working-directory: telegram
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          BOT_TAG: ${{ github.sha }}
-        run: docker compose -f deploy/docker-compose.yml up -d
-
-      - name: Confirm it is actually running
+          KOMODO_WEBHOOK_SECRET: ${{ secrets.KOMODO_WEBHOOK_SECRET }}
         run: |
-          sleep 3
-          docker compose -f telegram/deploy/docker-compose.yml ps --format json | grep -q '"State":"running"'
-          docker logs --tail 5 bytekodex-bot
-
-      - name: Drop anything the previous deploy left behind
-        if: always()
-        run: docker image prune -f --filter "label!=keep" >/dev/null
+          body='{"ref":"refs/heads/main"}'
+          signature="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$KOMODO_WEBHOOK_SECRET" -r | cut -d' ' -f1)"
+          curl -fsS -X POST https://komodo.mairwunnx.com/listener/github/stack/bytekodex/deploy \
+            -H 'content-type: application/json' -H "x-hub-signature-256: sha256=$signature" -d "$body"

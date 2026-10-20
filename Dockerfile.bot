@@ -27,6 +27,8 @@ ENV CGO_ENABLED=1
 # no longer pulled in implicitly the way they are for a normal C toolchain invocation.
 ENV CGO_LDFLAGS="-L/usr/local/lib -lm"
 RUN go build -trimpath -ldflags="-s -w" -o /out/bot ./cmd/bot
+# toolchainctl comes along for `toolchainctl sync`, which readies the host before the bot starts.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/toolchainctl ./cmd/toolchainctl
 
 # --- the docker CLI, from Docker's own minimal client-only image rather than a hand-verified
 # tarball: it is pulled the same way every FROM in this project already trusts its base image ---
@@ -41,10 +43,10 @@ RUN set -eux; \
     useradd --uid 1000 --create-home --shell /usr/sbin/nologin bot
 
 COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=gobuild /out/bot /usr/local/bin/bot
+COPY --from=gobuild /out/bot /out/toolchainctl /usr/local/bin/
 
-# lock.json baked in as a fallback only. In production it is bind-mounted from the host instead,
-# so a new JDK version reaches the bot without rebuilding this image — see deploy/compose.yml.
+# The lock the bot offers its versions from. A new one ships as a new image: toolchains.yml rebuilds
+# this one after it commits a lock.
 COPY telegram/toolchains/lock.json /opt/bytekodex/lock.json
 
 USER bot
