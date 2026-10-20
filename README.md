@@ -1,28 +1,16 @@
 # bytekodex-telegram
 
-The Telegram bot. Drop in JVM source, get a picture of the bytecode.
+The Telegram bot: send JVM source to [@bytekodex_bot](https://t.me/byt## How it behaves
 
-## How it behaves
+Send the bot a Java, Kotlin, or Groovy snippet. It guesses the language and answers with one message
+of buttons that rewrites itself as you press them: the language, the compiler version, the bytecode
+target, and what to show besides the methods—the constant pool, local variables, the stack map, line
+numbers, and attributes. Every button starts at a sensible default, so nothing asks you a question
+first. Press Compile, and you get one image per class.
 
-You paste code. The bot says what language it thinks that is and shows a keyboard — it does not
-ask you a question you have to answer before anything happens. Press Compile and you get one
-image per class.
+Send just the name of a JDK class, like `java.lang.String`, and you get the bytecode the JDK ships.
 
-The keyboard is a single message that rewrites itself:
-
-```
-Looks like Kotlin.
-Kotlin · Kotlin 2.2 · bytecode 25
-
-[ Language: Kotlin        ]
-[ Version: Kotlin 2.2 ] [ Target: 25 ]
-[ Show: methods only     ]
-[ Compile               ]
-[ Discard               ]
-```
-
-`Show` toggles the constant pool, the local variable table, the stack map, line numbers and
-attributes, which the old bot could not do at all.
+tes, which the old bot could not do at all.
 
 ## Layout
 
@@ -132,9 +120,11 @@ go run ./cmd/bot
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BYTEKODEX_TELEGRAM_TOKEN` | — | Required |
-| `BYTEKODEX_FONT` | a JetBrains Mono path | Single TrueType face; a `.ttc` is refused |
-| `BYTEKODEX_FONT_SIZE` | `28` | Render cost is linear in pixels, and a client scales the image down anyway |
+| `BYTEKODEX_FONT` | Fira Code from `fonts-firacode` | Single TrueType face; a `.ttc` is refused |
+| `BYTEKODEX_FONT_SIZE` | `40` | Render cost is linear in pixels, and a client scales the image down anyway |
 | `BYTEKODEX_DEPS` | — | Directory of jars mounted read-only for the classpath |
+| `BYTEKODEX_TOOLCHAIN_LOCK` | `toolchains/lock.json` | Which compilers the keyboard offers |
+| `BYTEKODEX_SYSCLASSES` | `/var/lib/bytekodex/sysclasses` | Each JDK's classes, from `toolchainctl sync`, for a message that is just a class name |
 | `BYTEKODEX_CONTAINER_RUNTIME` | `docker` | `podman` works too |
 | `BYTEKODEX_SESSION_TTL` | `30m` | How long a pasted snippet is remembered |
 
