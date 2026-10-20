@@ -1,6 +1,8 @@
 # bytekodex-telegram
 
-The Telegram bot: send JVM source to [@bytekodex_bot](https://t.me/byt## How it behaves
+The Telegram bot: send JVM source to [@bytekodex_bot](https://t.me/bytekodex_bot), get a picture of its bytecode.
+
+## How it behaves
 
 Send the bot a Java, Kotlin, or Groovy snippet. It guesses the language and answers with one message
 of buttons that rewrites itself as you press them: the language, the compiler version, the bytecode
@@ -11,6 +13,42 @@ first. Press Compile, and you get one image per class.
 Send just the name of a JDK class, like `java.lang.String`, and you get the bytecode the JDK ships.
 
 tes, which the old bot could not do at all.
+
+## Examples
+
+A sealed interface and a `switch` over it, compiled by javac 25. The pattern match becomes an
+`invokedynamic` to `typeSwitch` and a `lookupswitch`:
+
+```java
+sealed interface Shape permits Circle, Square {}
+record Circle(double radius) implements Shape {}
+record Square(double side) implements Shape {}
+
+class Area {
+    static double of(Shape shape) {
+        return switch (shape) {
+            case Circle c -> Math.PI * c.radius() * c.radius();
+            case Square s -> s.side() * s.side();
+        };
+    }
+}
+```
+
+![The bytecode of Area](docs/java-switch.png)
+
+A `suspend` function, compiled by Kotlin 2.3. One `delay` turns it into a state machine: a
+continuation object, a `label` field, and a `tableswitch` that resumes where it stopped:
+
+```kotlin
+import kotlinx.coroutines.delay
+
+suspend fun greet(name: String): String {
+    delay(100)
+    return "Hello, $name!"
+}
+```
+
+![The bytecode of GreeterKt](docs/kotlin-suspend.png)
 
 ## Layout
 

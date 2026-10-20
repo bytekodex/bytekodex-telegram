@@ -3,3 +3,4 @@ bytekodex-telegram
 *.png
 *.class
 .env
+!/docs/*.png
