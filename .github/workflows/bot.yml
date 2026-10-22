@@ -59,14 +59,12 @@ jobs:
           docker push ghcr.io/bytekodex/bot:${{ github.sha }}
           docker push ghcr.io/bytekodex/bot:latest
 
-      # The server runs the bot as a Komodo stack. This is the same signed call GitHub's own push
-      # webhook makes: Komodo pulls `latest`, readies the host with `toolchainctl sync`, and
-      # restarts the bot.
-      - name: Deploy
+      # The server runs the bot as a Komodo stack from MairwunNx/infrastructure. Its ship.yml pins that
+      # stack to this commit's image and pushes, and the push deploys it: the server readies the host
+      # with `toolchainctl sync` and restarts the bot.
+      - name: Ship to the server
         env:
-          KOMODO_WEBHOOK_SECRET: ${{ secrets.KOMODO_WEBHOOK_SECRET }}
-        run: |
-          body='{"ref":"refs/heads/main"}'
-          signature="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$KOMODO_WEBHOOK_SECRET" -r | cut -d' ' -f1)"
-          curl -fsS -X POST https://komodo.mairwunnx.com/listener/github/stack/bytekodex/deploy \
-            -H 'content-type: application/json' -H "x-hub-signature-256: sha256=$signature" -d "$body"
+          GH_TOKEN: ${{ secrets.FAMILY_ACTIONS_TOKEN }}
+        run: >-
+          gh workflow run ship.yml -R MairwunNx/infrastructure
+          -f stack=bytekodex -f image=ghcr.io/bytekodex/bot -f tag=${{ github.sha }}

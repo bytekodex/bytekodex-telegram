@@ -88,7 +88,7 @@ read-only root, an empty capability set, a pid cap, a memory cap and a deadline.
 
 A push to `master` that changes the bot runs `.github/workflows/bot.yml` on a GitHub-hosted runner.
 It builds `ghcr.io/bytekodex/bot` from this repository and the platform, pushes it under the commit
-and as `latest`, and asks the server to deploy. The server keeps the bot in a sandbox: its own user
+and as `latest`, and asks the server to run that commit's image. The server keeps the bot in a sandbox: its own user
 with a rootless Docker and a cap on memory and CPU, so neither the bot nor the compilers it starts
 for strangers reach anything else on the machine.
 
@@ -100,8 +100,8 @@ A change to `toolchains/manifest.json` runs `.github/workflows/toolchains.yml`: 
 commits it, builds and pushes the toolchain images the registry doesn't have yet, and starts
 `bot.yml`. The lock ships inside the bot's image, so the next deploy offers the new versions.
 
-`bot.yml` needs one secret besides the automatic `GITHUB_TOKEN`: `KOMODO_WEBHOOK_SECRET`, which signs
-the deploy call.
+`bot.yml` needs one secret besides the automatic `GITHUB_TOKEN`: `FAMILY_ACTIONS_TOKEN`, which starts
+the server's deploy.
 
 ### On your own machine
 
