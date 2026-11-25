@@ -3,20 +3,22 @@
 # (network none, read-only, its own user) — it never runs code itself, only asks the host's
 # daemon to. That daemon is reached through /var/run/docker.sock, mounted in at deploy time.
 #
-#   docker build -f Dockerfile.bot -t ghcr.io/bytekodex/bot:TAG \
-#     --build-arg PLATFORM_REF=<platform commit sha> ..
+#   docker build -f telegram/Dockerfile.bot --build-arg VERSION=1.2.0 -t ghcr.io/bytekodex/bot:1.2.0 .
 #
 # Build context is the superproject root, so both checkouts are visible as ./platform and
-# ./telegram.
+# ./telegram. release.yml checks the platform out at the tag in PLATFORM_VERSION; in the superproject
+# it is whatever the platform submodule points at.
 
 # --- the platform's C ABI, linked statically so the runtime image needs no .so alongside it ---
-FROM rust:1-slim-trixie AS platform
+# The Rust version follows the platform's rust-toolchain.toml, so rustup has nothing to download.
+FROM rust:1.100.0-slim-trixie AS platform
 WORKDIR /src
 COPY platform/ .
 RUN cargo build --release --locked -p bk-ffi
 
 # --- the bot binary, cgo against libbytekodex.a ---
-FROM golang:1.26-trixie AS gobuild
+FROM golang:1.27.4-trixie AS gobuild
+ARG VERSION=dev
 WORKDIR /src
 COPY telegram/go.mod telegram/go.sum ./
 RUN go mod download
@@ -26,16 +28,16 @@ ENV CGO_ENABLED=1
 # -lm because the static lib is Rust code linked into a C program now, and libm's powf/etc. are
 # no longer pulled in implicitly the way they are for a normal C toolchain invocation.
 ENV CGO_LDFLAGS="-L/usr/local/lib -lm"
-RUN go build -trimpath -ldflags="-s -w" -o /out/bot ./cmd/bot
+RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/bot ./cmd/bot
 # toolchainctl comes along for `toolchainctl sync`, which readies the host before the bot starts.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/toolchainctl ./cmd/toolchainctl
 
 # --- the docker CLI, from Docker's own minimal client-only image rather than a hand-verified
 # tarball: it is pulled the same way every FROM in this project already trusts its base image ---
-FROM docker:27-cli AS dockercli
+FROM docker:29.10.0-cli AS dockercli
 
 # --- runtime ---
-FROM debian:trixie-slim
+FROM debian:trixie-20261123-slim
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates fonts-firacode; \

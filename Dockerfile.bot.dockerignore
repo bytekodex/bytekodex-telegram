@@ -1,0 +1,5 @@
+# The build context is the superproject root (or a CI workspace shaped like it). Build output and
+# history of either checkout have no place in the image, and platform/target alone runs to gigabytes.
+**/.git
+platform/target
+telegram/bin

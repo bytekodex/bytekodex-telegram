@@ -7,11 +7,14 @@
 # command working on an x64 server and an arm64 laptop, and with buildx it produces one image that
 # holds both.
 #
-#   docker build -f Dockerfile.jdk -t ghcr.io/bytekodex/jdk:25 \
+# The tag is the major and a digest of the archives (toolchain.Lock.JDKImage), so a new build of a
+# major is a new image rather than a tag that silently keeps the old one.
+#
+#   docker build -f Dockerfile.jdk -t ghcr.io/bytekodex/jdk:25-<digest> \
 #     --build-arg URL_AMD64=... --build-arg SHA256_AMD64=... \
 #     --build-arg URL_ARM64=... --build-arg SHA256_ARM64=... .
 
-ARG BASE=debian:trixie-slim
+ARG BASE=debian:trixie-20261123-slim
 
 FROM ${BASE} AS download
 ARG TARGETARCH
