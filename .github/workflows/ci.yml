@@ -1,45 +1,62 @@
-name: ci
+name: CI
 
 on:
   push:
     branches: [master]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
-      # The render package is cgo over the platform's C ABI, so there is nothing to build here
-      # until the library exists. It is built from source rather than downloaded so that a change
-      # to the ABI breaks this job instead of production.
+      - uses: actions/checkout@v7
+        with:
+          path: telegram
+      # The render package is cgo over the platform's C ABI. The library is built from the release
+      # PLATFORM_VERSION names, so the bot always links against a version that was released.
+      - name: Read the platform version
+        id: platform
+        run: echo "version=$(cat telegram/PLATFORM_VERSION)" >> "$GITHUB_OUTPUT"
       - name: Check out the platform
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: bytekodex/bytekodex-platform
-          ref: master
+          ref: v${{ steps.platform.outputs.version }}
           path: platform
 
-      - uses: dtolnay/rust-toolchain@stable
+      # The vendored header is a copy of the platform's. A drift between them is an ABI bug waiting
+      # for production, so it fails here.
+      - name: Check the vendored header
+        run: diff -u platform/include/bytekodex.h telegram/internal/render/include/bytekodex.h
+
+      # rust-toolchain.toml in the platform names the Rust version.
+      - run: rustup toolchain install
+        working-directory: platform
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: platform
       - run: cargo build --release -p bk-ffi
         working-directory: platform
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.26'
+          go-version: "1.27.4"
+          cache-dependency-path: telegram/go.sum
 
       # Renderer tests skip themselves without a monospace face installed.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
 
       - run: gofmt -l . | tee /dev/stderr | (! read)
+        working-directory: telegram
       - run: go vet ./...
+        working-directory: telegram
         env:
           CGO_LDFLAGS: -L${{ github.workspace }}/platform/target/release
       - run: go test -race ./...
+        working-directory: telegram
         env:
           CGO_LDFLAGS: -L${{ github.workspace }}/platform/target/release
           LD_LIBRARY_PATH: ${{ github.workspace }}/platform/target/release

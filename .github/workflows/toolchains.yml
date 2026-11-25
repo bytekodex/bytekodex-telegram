@@ -1,5 +1,8 @@
-name: toolchains
+name: Toolchains
 
+# Builds the compiler images a new manifest needs, so the next release finds them ready. A release
+# builds whatever is still missing itself, and the lock reaches the bot only through a release.
+#
 # Manifest changes are the only thing that should trigger a resolve — adding a version is a one-line
 # edit, and the resolver is the only code here that talks to a foojay or a GitHub release page.
 # lock.json is committed by this workflow, not by hand, so a change to it alone does not re-trigger.
@@ -23,13 +26,12 @@ jobs:
     permissions:
       contents: write
       packages: write
-      actions: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.26"
+          go-version: "1.27.4"
 
       # GITHUB_TOKEN raises the GitHub API rate limit from 60 requests/hour to 5000, which a full
       # resolve spends most of on its own — see resolve.go for the early-access checksum problem
@@ -40,7 +42,6 @@ jobs:
         run: go run ./cmd/toolchainctl resolve
 
       - name: Commit the lock if resolving changed it
-        id: lock
         run: |
           if git diff --quiet toolchains/lock.json; then
             echo "lock unchanged"
@@ -51,21 +52,14 @@ jobs:
           git add toolchains/lock.json
           git commit -m "toolchainctl resolve"
           git push
-          echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Builds and pushes only what the registry does not already have. A version's checksum is
       # fixed once resolved, so an existing tag is byte-for-byte what a rebuild would produce.
       - name: Build and push new toolchain images
         run: ./toolchains/deploy.sh amd64
-
-      # The bot reads the lock from its own image. A push made with GITHUB_TOKEN starts no
-      # workflow, so the new lock ships by starting bot.yml here; the server's deploy then pulls
-      # the new images and extracts their system classes before the bot comes back.
-      - name: Ship the new lock with the bot
-        if: steps.lock.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run bot.yml --ref master

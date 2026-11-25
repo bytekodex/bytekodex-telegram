@@ -1,0 +1,51 @@
+name: Autopilot
+
+# Every Monday Claude updates this project, offers the newest JDK, Kotlin, and Groovy, and releases
+# what changed. It runs two hours after the platform's autopilot, so a new platform release is
+# there to move to.
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: autopilot
+  cancel-in-progress: false
+
+jobs:
+  autopilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+      # CLAUDE.md's checks build the platform's library next to this checkout, at ../platform.
+      - name: Check out the platform
+        run: git clone --quiet --depth 1 --branch "v$(cat PLATFORM_VERSION)" https://github.com/bytekodex/bytekodex-platform.git ../platform
+      - run: rustup toolchain install
+        working-directory: ../platform
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.4"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+      - uses: anthropics/claude-code-action@v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          claude_args: >-
+            --model claude-opus-5-5
+            --permission-mode bypassPermissions
+          prompt: |
+            You are this project's autopilot. You run unattended in GitHub Actions with the owner's standing go-ahead; nobody will answer questions, so decide as CLAUDE.md and the skills say.
+
+            1. Run /update-deps.
+            2. Run /update-toolchains.
+            3. If either pushed a change that reaches the bot's image, release it. The version is the topmost “## X.Y.Z” section of CHANGELOG.md. Run `gh workflow run release.yml -f version=X.Y.Z`, watch it with `gh run watch`, and check the release as CLAUDE.md says. Its `deploy` job then ships the release to @bytekodex_bot by itself.
+
+            If nothing was behind, stop without a commit or a release. Never print a secret. End with the reports the skills describe.

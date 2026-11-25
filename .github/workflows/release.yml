@@ -1,0 +1,133 @@
+name: Release
+
+# Run by hand: Actions → Release → Run workflow, with the new version. The autopilot runs it too.
+# It builds ghcr.io/bytekodex/bot:<version>, publishes the GitHub release, and ships the version to
+# @bytekodex_bot.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, like 1.2.0"
+        required: true
+      changelog:
+        description: "Changelog in Markdown; leave empty to take the version's section from CHANGELOG.md"
+        required: false
+      deploy:
+        description: "Ship the release to @bytekodex_bot (needs the FAMILY_ACTIONS_TOKEN secret)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release
+
+env:
+  IMAGE: ghcr.io/bytekodex/bot
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # The toolchain images a new lock needs are built here when toolchains.yml hasn't built them
+    # yet: a handful takes minutes, a full backfill hours.
+    timeout-minutes: 240
+    env:
+      VERSION: ${{ inputs.version }}
+      CHANGELOG: ${{ inputs.changelog }}
+      NOTES: ${{ github.workspace }}/release-notes.md
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: telegram
+      - name: Check the version
+        working-directory: telegram
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::$VERSION isn't a version like 1.2.0"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION is already released"; exit 1
+          fi
+      - name: Write the release notes
+        working-directory: telegram
+        shell: python
+        run: |
+          import os, re, sys
+          version, typed = os.environ["VERSION"], os.environ["CHANGELOG"].strip()
+          if typed:
+              notes = typed
+          else:
+              text = open("CHANGELOG.md", encoding="utf-8").read()
+              match = re.search(rf"^## {re.escape(version)}\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
+              notes = match.group(1).strip() if match else ""
+          if not notes:
+              sys.exit(f"::error::No changelog: add a “## {version}” section to CHANGELOG.md or fill the changelog field")
+          notes += f"\n\n```bash\ndocker pull {os.environ['IMAGE']}:{version}\n```"
+          open(os.environ["NOTES"], "w", encoding="utf-8").write(notes + "\n")
+          print(notes)
+      # The render package is cgo over the platform's C ABI. The library is built from the release
+      # PLATFORM_VERSION names, so the bot always links against a version that was released.
+      - name: Read the platform version
+        id: platform
+        run: echo "version=$(cat telegram/PLATFORM_VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Check out the platform
+        uses: actions/checkout@v7
+        with:
+          repository: bytekodex/bytekodex-platform
+          ref: v${{ steps.platform.outputs.version }}
+          path: platform
+
+      - name: Check the vendored header
+        run: diff -u platform/include/bytekodex.h telegram/internal/render/include/bytekodex.h
+      - run: rustup toolchain install
+        working-directory: platform
+      - run: cargo build --release -p bk-ffi
+        working-directory: platform
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.4"
+          cache-dependency-path: telegram/go.sum
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+      - name: Test
+        working-directory: telegram
+        run: go vet ./... && go test ./...
+        env:
+          CGO_LDFLAGS: -L${{ github.workspace }}/platform/target/release
+          LD_LIBRARY_PATH: ${{ github.workspace }}/platform/target/release
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The bot offers what its lock says, so every image the lock names has to exist before the
+      # bot does. deploy.sh skips the ones the registry already has.
+      - name: Build the missing toolchain images
+        working-directory: telegram
+        run: ./toolchains/deploy.sh amd64
+
+      - name: Build and push the bot
+        run: |
+          docker build -f telegram/Dockerfile.bot --build-arg VERSION="$VERSION" -t "$IMAGE:$VERSION" .
+          docker push "$IMAGE:$VERSION"
+
+      - name: Publish the GitHub release
+        working-directory: telegram
+        run: gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Bytekodex bot $VERSION" --notes-file "$NOTES"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  deploy:
+    needs: release
+    if: inputs.deploy
+    runs-on: ubuntu-latest
+    steps:
+      # The server runs the bot as a Komodo stack from MairwunNx/infrastructure. Its ship.yml pins
+      # that stack to this version and pushes, and the push deploys it: the server readies the host
+      # with `toolchainctl sync` and restarts the bot.
+      - name: Ship to @bytekodex_bot
+        run: gh workflow run ship.yml -R MairwunNx/infrastructure -f stack=bytekodex -f image="$IMAGE" -f tag="$VERSION"
+        env:
+          GH_TOKEN: ${{ secrets.FAMILY_ACTIONS_TOKEN }}
+          VERSION: ${{ inputs.version }}

@@ -22,6 +22,9 @@ import (
 	tgbot "github.com/go-telegram/bot"
 )
 
+// version is the release this binary was built for. release.yml sets it through -ldflags.
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("shutting down", "error", err)
@@ -140,7 +143,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Info("listening", "workers", config.workers, "font", config.fontPath)
+	log.Info("listening", "version", version, "workers", config.workers, "font", config.fontPath)
 	b.Start(ctx)
 	log.Info("stopped", "opcodes_decoded", render.OpcodesDecoded())
 	return nil
