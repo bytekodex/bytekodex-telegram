@@ -523,8 +523,10 @@ func (r *Resolver) getJSON(ctx context.Context, address string, into any) error 
 // Retry-After is honored when the server sends one; otherwise the backoff is a guess, same as
 // any client talking to a server that did not say how long to wait.
 func (r *Resolver) do(request *http.Request) (*http.Response, error) {
-	const maxAttempts = 5
-	const maxRetryAfter = 30 * time.Second
+	// Maven Central keeps a client throttled for minutes once it has tripped the limit, so the
+	// backoff doubles up to two minutes: about six and a half minutes in all before giving up.
+	const maxAttempts = 8
+	const maxRetryAfter = 2 * time.Minute
 	var response *http.Response
 	var err error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -536,7 +538,7 @@ func (r *Resolver) do(request *http.Request) (*http.Response, error) {
 		}
 		wait := retryAfter(response.Header.Get("Retry-After"))
 		if wait == 0 {
-			wait = time.Duration(attempt) * 5 * time.Second
+			wait = 5 * time.Second << (attempt - 1)
 		}
 		// A server-sent Retry-After is honored, but not blindly: a long one is exactly what happens
 		// when a run has already been retried, killed and restarted a few times against the same
