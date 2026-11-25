@@ -99,7 +99,7 @@ func (h *Handler) code(ctx context.Context, b *bot.Bot, update *models.Update) {
 
 	guess := detect.Source(code)
 	s := h.Sessions.Start(message.Chat.ID, []session.File{
-		{Name: guess.Language.SourceName("Snippet"), Content: code},
+		{Name: guess.Language.SourceName(sourceBase(code)), Content: code},
 	}, guess)
 
 	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -616,4 +616,14 @@ func attachmentName(class string) string {
 		name = "bytecode"
 	}
 	return name + ".png"
+}
+
+// sourceBase is the name a pasted snippet is written under: its public top-level type when it has
+// one, since javac refuses `public class Greeter` in any file but Greeter.java, and Snippet
+// otherwise. Kotlin and Groovy take any name, so the same rule does them no harm.
+func sourceBase(code string) string {
+	if name := detect.PublicType(code); name != "" {
+		return name
+	}
+	return "Snippet"
 }

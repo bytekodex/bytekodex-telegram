@@ -67,6 +67,21 @@ func (l Language) SourceName(filename string) string {
 	return name + l.Extension()
 }
 
+// publicType matches a public type declared at the start of a line, which in a pasted file is a
+// top-level one: nested types are indented.
+var publicType = regexp.MustCompile(`(?m)^(?:@[\w.]+(?:\([^)\n]*\))?\s+)*public\s+(?:(?:abstract|final|sealed|non-sealed|strictfp|static)\s+)*(?:class|interface|enum|record|@interface)\s+([A-Za-z_$][\w$]*)`)
+
+// PublicType names the public top-level type of a Java file, or returns "" when it has none.
+// javac insists that such a type lives in a file of the same name, so a paste that declares
+// `public class Greeter` has to be written as Greeter.java, not as Snippet.java.
+func PublicType(code string) string {
+	match := publicType.FindStringSubmatch(stripNonCode(code))
+	if match == nil {
+		return ""
+	}
+	return match[1]
+}
+
 // Guess is a language with the confidence behind it.
 type Guess struct {
 	Language Language

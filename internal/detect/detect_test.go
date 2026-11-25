@@ -90,3 +90,20 @@ func TestStripNonCodeKeepsCodeAfterSlashStarInString(t *testing.T) {
 		t.Errorf("stripNonCode() = %q, want %q", got, want)
 	}
 }
+
+func TestPublicTypeNamesTheTopLevelType(t *testing.T) {
+	cases := []struct{ code, want string }{
+		{"public class Greeter {\n    public static class Inner {}\n}", "Greeter"},
+		{"import java.util.List;\n\n@Deprecated\npublic final class Box<T> {}", "Box"},
+		{"public record Point(int x, int y) {}", "Point"},
+		{"public sealed interface Shape permits Circle {}", "Shape"},
+		{"class Area {\n    public static class Inner {}\n}", ""},
+		{"// public class Commented {}\nclass Real {}", ""},
+		{"String s = \"public class Quoted {}\";", ""},
+	}
+	for _, c := range cases {
+		if got := PublicType(c.code); got != c.want {
+			t.Errorf("PublicType(%q) = %q, want %q", c.code, got, c.want)
+		}
+	}
+}

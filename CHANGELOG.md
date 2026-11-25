@@ -8,6 +8,7 @@ The “Release” workflow takes the notes for a version from its section here, 
 - 🟢 **Groovy 6.0.0** joins and is the new default. It runs on JDK 27 and emits bytecode up to Java 27. Groovy 5.1 moves to 5.1.3.
 - 🟣 **Kotlin 2.4.21** replaces 2.4.20 and emits bytecode up to Java 26.
 - ☕ **JDK 27 is final.** The bot compiles with its GA build instead of early access, and every other JDK moves to its newest build. JDK 28 stays in early access, with preview features on.
+- 📄 **A public class compiles.** A pasted `public class Greeter` failed with javac’s “should be declared in a file named Greeter.java”: the bot wrote every paste as `Snippet.java`. It now names the file after the public top-level type.
 - 🏷️ **A new JDK build is a new image.** JDK images were tagged by their major alone, so a newer build never replaced the one in the registry. Each image now carries a digest of its archives, and the server swaps in the system classes of the new build.
 - 🚀 **Releases.** The bot ships as `ghcr.io/bytekodex/bot:<version>` when a release runs, not on every push, and links against a released platform (`PLATFORM_VERSION`).
 - ⬆️ Updated Go to 1.27.4, go-telegram/bot to 1.30.0, the docker CLI to 29.10.0, and pinned every base image to an exact tag.
