@@ -3,14 +3,26 @@
   "editor.insertFinalNewline": true,
   "editor.trimTrailingWhitespace": true,
   "files.eol": "\n",
+  "files.exclude": {
+    "**/bin": true
+  },
   "go.useLanguageServer": true,
   "go.lintTool": "golangci-lint",
   "go.testFlags": ["-count=1"],
+  "go.toolsEnvVars": {
+    "CGO_LDFLAGS": "-L${workspaceFolder}/../platform/target/release"
+  },
   "gopls": {
     "ui.semanticTokens": true
   },
   "[go]": {
     "editor.defaultFormatter": "golang.go",
     "editor.insertSpaces": false
+  },
+  "[markdown]": {
+    "files.trimTrailingWhitespace": false
+  },
+  "yaml.schemas": {
+    "https://json.schemastore.org/github-workflow.json": ".github/workflows/*.yml"
   }
 }

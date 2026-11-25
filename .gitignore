@@ -4,3 +4,5 @@ bytekodex-telegram
 *.class
 .env
 !/docs/*.png
+!/media/**
+.DS_Store

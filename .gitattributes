@@ -2,3 +2,9 @@
 
 go.sum text -diff linguist-generated
 toolchains/lock.json text -diff linguist-generated
+
+# The recorded scenes are full-size videos: kept in LFS, so they never weigh on every clone of the history.
+media/**/*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.png binary
+*.webp binary
+*.gif binary
