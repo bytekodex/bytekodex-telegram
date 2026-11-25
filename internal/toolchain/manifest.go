@@ -1,6 +1,8 @@
 package toolchain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -40,7 +42,7 @@ type JDKRequest struct {
 	// ReleaseFloor is the oldest bytecode level this javac still emits. JEP 182 retires old
 	// values over time, so this is per version rather than a constant.
 	ReleaseFloor int `json:"release_floor"`
-	// AllowEarlyAccess permits an EA build. JDK 27 and 28 have no GA builds at all yet.
+	// AllowEarlyAccess permits an EA build, for a JDK that has no GA build yet.
 	AllowEarlyAccess bool `json:"allow_early_access,omitempty"`
 	// Preview enables --enable-preview. javac only accepts it when the target equals the
 	// compiler's own version, so it applies to the newest JDK and nothing else.
@@ -135,7 +137,26 @@ type LockedDependency struct {
 // the runtime catalog cannot disagree about it.
 const ImagePrefix = "ghcr.io/bytekodex"
 
-func (l LockedJDK) Image() string { return fmt.Sprintf("%s/jdk:%d", ImagePrefix, l.Major) }
+// JDKImage is the tag one JDK version is built as. It names the major and a digest of every archive
+// locked for it, so a new build of the same major (a patch, or early access turning GA) becomes a
+// new tag that deploy.sh builds, while an unchanged lock names the tag the registry already has.
+func (l *Lock) JDKImage(major int) string {
+	return fmt.Sprintf("%s/jdk:%s", ImagePrefix, l.jdkTag(major))
+}
+
+// SysclassImage is the tag of the java.* classes extracted from JDKImage(major).
+func (l *Lock) SysclassImage(major int) string {
+	return fmt.Sprintf("%s/sysclasses:%s", ImagePrefix, l.jdkTag(major))
+}
+
+func (l *Lock) jdkTag(major int) string {
+	digest := sha256.New()
+	for _, entry := range l.Architectures(major) {
+		fmt.Fprintf(digest, "%s %s\n", entry.Architecture, entry.SHA256)
+	}
+	return fmt.Sprintf("%d-%s", major, hex.EncodeToString(digest.Sum(nil))[:12])
+}
+
 func (l LockedTool) Image(language string) string {
 	return fmt.Sprintf("%s/%s:%s", ImagePrefix, language, l.Version)
 }

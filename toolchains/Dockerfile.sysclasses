@@ -8,8 +8,8 @@
 # it out, as <store root>/<major>/ — the store keys on the major version because the same class from
 # JDK 8 and JDK 25 is different bytecode, which is most of the reason to look.
 #
-#   docker build -f Dockerfile.sysclasses -t ghcr.io/bytekodex/sysclasses:25 \
-#     --build-arg BASE=ghcr.io/bytekodex/jdk:25 .
+#   docker build -f Dockerfile.sysclasses -t ghcr.io/bytekodex/sysclasses:25-<digest> \
+#     --build-arg BASE=ghcr.io/bytekodex/jdk:25-<digest> .
 
 ARG BASE
 

@@ -49,6 +49,7 @@ func syncHost(lockPath, root string) error {
 	if err := syncDeps(lock, filepath.Join(root, "deps")); err != nil {
 		return err
 	}
+	pruneImages(runtime, lock)
 
 	scratch := filepath.Join(root, "scratch")
 	if err := os.MkdirAll(scratch, 0o755); err != nil {
@@ -88,17 +89,22 @@ func pullImages(runtime string, catalog *toolchain.Catalog) error {
 	return nil
 }
 
-// syncSysclasses turns each `sysclasses:<major>` image into a directory of .class files. Reading a
+// syncSysclasses turns each `sysclasses:<major>-<digest>` image into a directory of .class files,
+// and does it again when the lock moves that major to a new build: the directory remembers its
+// image in a file next to the classes. Reading a
 // file out of an image takes a container, even one that never runs anything: CMD is unset in
 // Dockerfile.sysclasses on purpose.
+// imageMarker names the image a sysclasses directory was copied from.
+const imageMarker = ".image"
+
 func syncSysclasses(runtime string, lock *toolchain.Lock, dest string) error {
 	extracted := 0
 	for _, major := range lock.Majors() {
 		dir := filepath.Join(dest, strconv.Itoa(major))
-		if _, err := os.Stat(filepath.Join(dir, "java")); err == nil {
+		image := lock.SysclassImage(major)
+		if from, err := os.ReadFile(filepath.Join(dir, imageMarker)); err == nil && strings.TrimSpace(string(from)) == image {
 			continue
 		}
-		image := sysclassImage(major)
 		fmt.Printf("sync  %s\n", image)
 		if output, err := exec.Command(runtime, "pull", "-q", image).CombinedOutput(); err != nil {
 			return fmt.Errorf("pulling %s: %w: %s", image, err, output)
@@ -119,6 +125,9 @@ func syncSysclasses(runtime string, lock *toolchain.Lock, dest string) error {
 		_ = exec.Command(runtime, "rm", "-f", container).Run()
 		if err != nil {
 			return fmt.Errorf("copying the classes out of %s: %w: %s", image, err, output)
+		}
+		if err := os.WriteFile(filepath.Join(partial, imageMarker), []byte(image+"\n"), 0o644); err != nil {
+			return err
 		}
 		_ = os.RemoveAll(dir)
 		if err := os.Rename(partial, dir); err != nil {
@@ -198,4 +207,44 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// pruneImages untags the compiler and sysclasses images this lock no longer names: a JDK that moved
+// to a new build leaves its old tag behind on every deploy otherwise. Layers a remaining image still
+// builds on stay. The bot's own image is never touched, and a failure only costs disk space, so it
+// is reported and the deploy goes on.
+func pruneImages(runtime string, lock *toolchain.Lock) {
+	wanted := map[string]bool{}
+	catalog := toolchain.FromLock(lock)
+	for _, language := range catalog.Languages() {
+		chain, _ := catalog.For(language)
+		for _, release := range chain.Releases {
+			wanted[release.Image] = true
+		}
+	}
+	for _, major := range lock.Majors() {
+		wanted[lock.JDKImage(major)] = true
+		wanted[lock.SysclassImage(major)] = true
+	}
+
+	removed := 0
+	for _, repository := range []string{"jdk", "kotlin", "groovy", "sysclasses"} {
+		listed, err := exec.Command(runtime, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}",
+			toolchain.ImagePrefix+"/"+repository).Output()
+		if err != nil {
+			fmt.Printf("prune %s: %v\n", repository, err)
+			continue
+		}
+		for _, image := range strings.Fields(string(listed)) {
+			if wanted[image] || strings.HasSuffix(image, ":<none>") {
+				continue
+			}
+			if output, err := exec.Command(runtime, "image", "rm", image).CombinedOutput(); err != nil {
+				fmt.Printf("prune %s: %v: %s\n", image, err, strings.TrimSpace(string(output)))
+				continue
+			}
+			removed++
+		}
+	}
+	fmt.Printf("images: %d no longer in the lock removed\n", removed)
 }

@@ -4,7 +4,7 @@
 # installs identically and the only thing that changes is the URL.
 #
 #   docker build -f Dockerfile.kotlin -t ghcr.io/bytekodex/kotlin:2.4.20 \
-#     --build-arg BASE=ghcr.io/bytekodex/jdk:25 --build-arg URL=... --build-arg SHA256=... .
+#     --build-arg BASE=ghcr.io/bytekodex/jdk:25-<digest> --build-arg URL=... --build-arg SHA256=... .
 
 ARG BASE
 

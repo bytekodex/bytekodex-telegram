@@ -116,7 +116,7 @@ func javaToolchain(lock *Lock) Toolchain {
 		releases = append(releases, Release{
 			ID:              fmt.Sprintf("java%d", jdk.Major),
 			Label:           label,
-			Image:           jdk.Image(),
+			Image:           lock.JDKImage(major),
 			Targets:         targets(jdk.ReleaseFloor, fmt.Sprint(jdk.Major)),
 			Default:         i == 0,
 			Preview:         jdk.Preview,

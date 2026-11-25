@@ -142,8 +142,6 @@ func plan(lockPath, platform string) error {
 				continue
 			}
 		}
-		representative := entries[0]
-
 		// One image per version, carrying every architecture it was resolved for. The Dockerfile
 		// picks by TARGETARCH, so the same command works on an x64 server and an arm64 laptop, and
 		// with buildx it produces one multi-architecture image.
@@ -152,7 +150,7 @@ func plan(lockPath, platform string) error {
 			platforms = append(platforms, "linux/"+dockerArch(entry.Architecture))
 		}
 
-		fmt.Printf("docker build -f toolchains/Dockerfile.jdk -t %s \\\n", representative.Image())
+		fmt.Printf("docker build -f toolchains/Dockerfile.jdk -t %s \\\n", lock.JDKImage(major))
 		fmt.Printf("  --platform %s \\\n", strings.Join(platforms, ","))
 		for _, entry := range entries {
 			suffix := strings.ToUpper(dockerArch(entry.Architecture))
@@ -162,11 +160,11 @@ func plan(lockPath, platform string) error {
 		fmt.Printf("  toolchains\n")
 
 		// The system classes come out of the JDK image, so they are planned next to it.
-		fmt.Printf("docker build -f toolchains/Dockerfile.sysclasses -t %s \\\n", sysclassImage(major))
+		fmt.Printf("docker build -f toolchains/Dockerfile.sysclasses -t %s \\\n", lock.SysclassImage(major))
 		if platform != "" {
 			fmt.Printf("  --platform linux/%s \\\n", dockerArch(platform))
 		}
-		fmt.Printf("  --build-arg BASE=%s \\\n", representative.Image())
+		fmt.Printf("  --build-arg BASE=%s \\\n", lock.JDKImage(major))
 		fmt.Printf("  toolchains\n")
 	}
 
@@ -203,8 +201,8 @@ func dockerArch(architecture string) string {
 	}
 }
 
-// printMajors is deliberately plain text, one integer per line, so a shell loop can go over
-// `docker pull ghcr.io/bytekodex/sysclasses:$major` without a JSON parser.
+// printMajors is deliberately plain text, one integer per line, so a shell loop can go over the
+// majors without a JSON parser.
 func printMajors(lockPath string) error {
 	lock, err := toolchain.LoadLock(lockPath)
 	if err != nil {
@@ -231,14 +229,10 @@ func printDeps(lockPath string) error {
 	return nil
 }
 
-func sysclassImage(major int) string {
-	return fmt.Sprintf("%s/sysclasses:%d", toolchain.ImagePrefix, major)
-}
-
 func printToolBuild(language string, tool toolchain.LockedTool, lock *toolchain.Lock, platform string) {
 	base := ""
-	if representative, ok := lock.Representative(tool.JDK); ok {
-		base = representative.Image()
+	if _, ok := lock.Representative(tool.JDK); ok {
+		base = lock.JDKImage(tool.JDK)
 	}
 
 	fmt.Printf("docker build -f toolchains/Dockerfile.%s -t %s \\\n", language, tool.Image(language))
@@ -306,7 +300,7 @@ func probe(lockPath string) error {
 	for _, major := range lock.Majors() {
 		entry, _ := lock.Representative(major)
 
-		floor, err := probeFloor(runtime, entry.Image())
+		floor, err := probeFloor(runtime, lock.JDKImage(major))
 		switch {
 		case errors.Is(err, errNoImage):
 			skipped++

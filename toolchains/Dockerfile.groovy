@@ -4,7 +4,7 @@
 # rather than named — that is the only difference from the Kotlin image.
 #
 #   docker build -f Dockerfile.groovy -t ghcr.io/bytekodex/groovy:5.1.2 \
-#     --build-arg BASE=ghcr.io/bytekodex/jdk:25 --build-arg URL=... --build-arg SHA256=... .
+#     --build-arg BASE=ghcr.io/bytekodex/jdk:25-<digest> --build-arg URL=... --build-arg SHA256=... .
 
 ARG BASE
 

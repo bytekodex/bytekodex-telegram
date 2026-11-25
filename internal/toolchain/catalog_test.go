@@ -238,3 +238,27 @@ func TestShippedLockCoversTheManifest(t *testing.T) {
 		}
 	}
 }
+
+func TestJDKImageFollowsTheLockedArchives(t *testing.T) {
+	lock := &Lock{JDK: []LockedJDK{
+		{Major: 27, Architecture: "x64", SHA256: "aa"},
+		{Major: 27, Architecture: "aarch64", SHA256: "bb"},
+	}}
+	before := lock.JDKImage(27)
+	if !strings.HasPrefix(before, ImagePrefix+"/jdk:27-") {
+		t.Fatalf("JDKImage(27) = %q, want the major first", before)
+	}
+	if lock.JDKImage(27) != before {
+		t.Fatal("JDKImage is not stable for the same lock")
+	}
+
+	// Early access turning GA, or a new patch, is a new archive: the image has to be a new tag,
+	// or deploy.sh would keep the old build because the tag is already in the registry.
+	lock.JDK[0].SHA256 = "cc"
+	if lock.JDKImage(27) == before {
+		t.Fatal("a new archive kept the old image tag")
+	}
+	if got, want := strings.TrimPrefix(lock.SysclassImage(27), ImagePrefix+"/sysclasses:"), strings.TrimPrefix(lock.JDKImage(27), ImagePrefix+"/jdk:"); got != want {
+		t.Fatalf("sysclasses tag %q, jdk tag %q: they should match", got, want)
+	}
+}
