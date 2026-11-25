@@ -22,6 +22,10 @@ import (
 // outside world, and it runs when a human asks it to — never as part of serving a request.
 type Resolver struct {
 	HTTP *http.Client
+	// Previous is the lock this run replaces, when there is one. A Kotlin or Groovy release it
+	// already pinned is taken from it as is: a published archive never changes, and asking Maven
+	// Central again for a dozen jars every week is exactly what earns a 429.
+	Previous *Lock
 	// Log receives one line per resolved entry, so a slow run shows progress.
 	Log func(format string, args ...any)
 }
@@ -236,6 +240,9 @@ func (r *Resolver) foojayDetail(ctx context.Context, id string) (*foojayDetail, 
 // request. Everything older has neither, so the archive is downloaded once and hashed here —
 // about 420 MB across the seven oldest lines, paid once because the lock is committed.
 func (r *Resolver) resolveKotlin(ctx context.Context, request VersionRequest) (*LockedTool, error) {
+	if known, ok := r.previousTool(r.previousKotlin(), request); ok {
+		return known, nil
+	}
 	base := fmt.Sprintf("https://github.com/JetBrains/kotlin/releases/download/v%s/", request.Version)
 	return r.resolveKotlinFrom(ctx, request, base)
 }
@@ -463,6 +470,11 @@ func (r *Resolver) githubDigest(ctx context.Context, repository, tag, asset stri
 // resolveGroovy points at the Apache archive rather than a mirror: mirrors drop old versions,
 // and the whole point of this list is that old versions keep working.
 func (r *Resolver) resolveGroovy(ctx context.Context, request VersionRequest) (*LockedTool, error) {
+	if r.Previous != nil {
+		if known, ok := r.previousTool(r.Previous.Groovy, request); ok {
+			return known, nil
+		}
+	}
 	base := fmt.Sprintf("https://archive.apache.org/dist/groovy/%s/distribution/", request.Version)
 	archive := fmt.Sprintf("apache-groovy-binary-%s.zip", request.Version)
 
@@ -688,4 +700,46 @@ func githubToken() string {
 		}
 	}
 	return ""
+}
+
+func (r *Resolver) previousKotlin() []LockedTool {
+	if r.Previous == nil {
+		return nil
+	}
+	return r.Previous.Kotlin
+}
+
+// previousTool finds the release a request names in the previous lock. The downloads are reused
+// only when they are the same downloads: the same version and, for Kotlin, the same coroutines.
+// What the manifest says about the release (its target, JDK, default) always comes from the
+// request, so editing those never needs the network.
+func (r *Resolver) previousTool(tools []LockedTool, request VersionRequest) (*LockedTool, bool) {
+	for _, tool := range tools {
+		if tool.Version != request.Version || tool.SHA256 == "" {
+			continue
+		}
+		if request.Coroutines != "" && !hasCoroutines(tool.Deps, request.Coroutines) {
+			continue
+		}
+		if request.Coroutines == "" && len(tool.Deps) > 0 {
+			continue
+		}
+		known := tool
+		known.JVMTargetMax = request.JVMTargetMax
+		known.JDK = request.JDK
+		known.Default = request.Default
+		known.Deps = append([]LockedDependency(nil), tool.Deps...)
+		r.Log("%s: already locked", request.Version)
+		return &known, true
+	}
+	return nil, false
+}
+
+func hasCoroutines(deps []LockedDependency, version string) bool {
+	for _, dep := range deps {
+		if strings.Contains(dep.URL, "/kotlinx-coroutines-core") && strings.Contains(dep.URL, "/"+version+"/") {
+			return true
+		}
+	}
+	return false
 }

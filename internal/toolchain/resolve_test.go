@@ -364,3 +364,47 @@ func TestAnEarlyAccessBuildIsNeverTrustedToFoojaysChecksum(t *testing.T) {
 		t.Error("never fetched the archive it had to hash")
 	}
 }
+
+func TestResolveReusesWhatThePreviousLockPinned(t *testing.T) {
+	r := NewResolver()
+	r.HTTP = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatalf("asked the network for %s", request.URL)
+		return nil, nil
+	})}
+	r.Previous = &Lock{
+		Kotlin: []LockedTool{{Version: "2.4.21", URL: "k", SHA256: "aa", JVMTargetMax: "25", Deps: []LockedDependency{
+			{Name: "kotlin-stdlib.jar", URL: MavenCentral + "/org/jetbrains/kotlin/kotlin-stdlib/2.4.21/kotlin-stdlib-2.4.21.jar", SHA256: "bb"},
+			{Name: "kotlinx-coroutines-core-jvm.jar", URL: MavenCentral + "/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.11.0/kotlinx-coroutines-core-jvm-1.11.0.jar", SHA256: "cc"},
+		}}},
+		Groovy: []LockedTool{{Version: "6.0.0", URL: "g", SHA256: "dd"}},
+	}
+
+	kotlin, err := r.resolveKotlin(context.Background(), VersionRequest{Version: "2.4.21", JVMTargetMax: "26", JDK: 25, Coroutines: "1.11.0", Default: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kotlin.SHA256 != "aa" || len(kotlin.Deps) != 2 || kotlin.JVMTargetMax != "26" || !kotlin.Default {
+		t.Errorf("kotlin = %+v, want the locked downloads with the request's target and default", kotlin)
+	}
+	groovy, err := r.resolveGroovy(context.Background(), VersionRequest{Version: "6.0.0", JVMTargetMax: "27", JDK: 27})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if groovy.SHA256 != "dd" || groovy.JDK != 27 {
+		t.Errorf("groovy = %+v", groovy)
+	}
+}
+
+func TestResolveLooksUpNewCoroutinesAgain(t *testing.T) {
+	r := NewResolver()
+	r.Previous = &Lock{Kotlin: []LockedTool{{Version: "2.4.21", SHA256: "aa", Deps: []LockedDependency{
+		{URL: MavenCentral + "/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.11.0/x.jar"},
+	}}}}
+	if _, ok := r.previousTool(r.Previous.Kotlin, VersionRequest{Version: "2.4.21", Coroutines: "1.12.0"}); ok {
+		t.Error("reused a lock entry pinned to other coroutines")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

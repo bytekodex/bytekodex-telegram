@@ -38,6 +38,8 @@ commands:
 flags:
   -dir string        directory holding manifest.json and lock.json (default "toolchains")
   -quiet             do not report progress while resolving
+  -fresh             resolve: look every Kotlin and Groovy release up again instead of reusing
+                     what the current lock already pinned
   -platform string   plan: restrict to one architecture (amd64 or arm64), skipping versions that
                       have nothing resolved for it
   -root string       sync: where the bot's data lives (default "/opt/bytekodex")
@@ -52,6 +54,7 @@ func main() {
 	flags := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
 	dir := flags.String("dir", "toolchains", "directory holding manifest.json and lock.json")
 	quiet := flags.Bool("quiet", false, "do not report progress while resolving")
+	fresh := flags.Bool("fresh", false, "resolve: ignore what the current lock already pinned")
 	platform := flags.String("platform", "", "restrict plan to one Docker architecture (amd64 or arm64); empty means every architecture the lock has")
 	root := flags.String("root", "/opt/bytekodex", "sync: where the bot's data lives")
 	flags.Usage = func() { fmt.Fprint(os.Stderr, usage) }
@@ -65,7 +68,7 @@ func main() {
 	var err error
 	switch os.Args[1] {
 	case "resolve":
-		err = resolve(manifestPath, lockPath, *quiet)
+		err = resolve(manifestPath, lockPath, *quiet, *fresh)
 	case "plan":
 		err = plan(lockPath, *platform)
 	case "show":
@@ -89,7 +92,7 @@ func main() {
 	}
 }
 
-func resolve(manifestPath, lockPath string, quiet bool) error {
+func resolve(manifestPath, lockPath string, quiet, fresh bool) error {
 	manifest, err := toolchain.LoadManifest(manifestPath)
 	if err != nil {
 		return err
@@ -101,6 +104,12 @@ func resolve(manifestPath, lockPath string, quiet bool) error {
 	defer stop()
 
 	resolver := toolchain.NewResolver()
+	if !fresh {
+		// A missing or unreadable lock only means there is nothing to reuse.
+		if previous, err := toolchain.LoadLock(lockPath); err == nil {
+			resolver.Previous = previous
+		}
+	}
 	if !quiet {
 		resolver.Log = func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "  "+format+"\n", args...)
